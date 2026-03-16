@@ -3,7 +3,7 @@ const webhookRoutes = require("./routes/webhook.routes");
 
 //Ruta de prueba
 fastify.get("/", async (request, reply) => {
-  return { message: "API funcionando correctamente" };
+  return { message: "API funcionando satisfactoriamente" };
 });
 
 // Registramos nuestras rutas en la aplicación
