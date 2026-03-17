@@ -1,4 +1,3 @@
-// src/integrations/quickbooks/quickbooks.client.js
 require('dotenv').config();
 const axios = require('axios');
 
@@ -9,17 +8,19 @@ async function getPaymentDetails(realmId, paymentId, accessToken) {
   try {
     const response = await axios.get(url, {
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Accept': 'application/json'
-      }
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+      },
     });
     return response.data;
   } catch (error) {
-    throw new Error(`Error en API QuickBooks: ${error.response ? JSON.stringify(error.response.data) : error.message}`);
+    throw new Error(
+      `Error en API QuickBooks: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+    );
   }
 }
 
-const findCustomerByEmail = async (email) => {
+async function findCustomerByEmail(email) {
   try {
     const realmId = process.env.QB_REALM_ID;
 
@@ -31,8 +32,8 @@ const findCustomerByEmail = async (email) => {
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${process.env.QB_TEST_ACCESS_TOKEN}`,
-        Accept: 'application/json'
-      }
+        Accept: 'application/json',
+      },
     });
 
     const customerInfo = response.data.QueryResponse.Customer;
@@ -43,11 +44,44 @@ const findCustomerByEmail = async (email) => {
     } else {
       return null; // Retornamos null si el cliente no existe en QB
     }
-
   } catch (error) {
-    console.error("Error buscando cliente en QuickBooks:", error.response?.data || error.message);
+    console.error('Error buscando cliente en QuickBooks:', error.response?.data || error.message);
     throw error;
   }
-};
+}
 
-module.exports = { getPaymentDetails, findCustomerByEmail };
+async function createCustomer(customerData) {
+  try {
+    const realmId = process.env.QB_REALM_ID;
+    const url = `${process.env.QB_SANDBOX_BASE_URL}/${realmId}/customer?minorversion=65`;
+
+    // Armamos el "Payload" (el cuerpo del mensaje) tal como lo exige QuickBooks
+    const payload = {
+      GivenName: customerData.firstName || '',
+      FamilyName: customerData.lastName || '',
+      // DisplayName es obligatorio en QB y debe ser ÚNICO en toda la cuenta.
+      DisplayName: `${customerData.firstName || ''} ${customerData.lastName || ''}`.trim(),
+      PrimaryEmailAddr: {
+        Address: customerData.email,
+      },
+    };
+
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${process.env.QB_TEST_ACCESS_TOKEN}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Retornamos el objeto del cliente recién creado (que incluye su nuevo ID generado por QB)
+    return response.data.Customer;
+  } catch (error) {
+    // Extraemos el detalle del error de Intuit si existe, para que sea fácil depurar
+    const intuitError = error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error('Error creando cliente en QuickBooks:', intuitError);
+    throw error;
+  }
+}
+
+module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer };
