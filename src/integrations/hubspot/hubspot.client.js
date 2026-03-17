@@ -59,7 +59,46 @@ async function updateContactProperty(contactId, qbId) {
   }
 };
 
+async function getAllContacts () {
+  try {
+    let allContacts = [];
+    let after = undefined;
+    
+    console.log("Descargando contactos históricos de HubSpot...");
+
+    // Usamos un bucle do-while para la "paginación"
+    do {
+      let url = `https://api.hubapi.com/crm/v3/objects/contacts?limit=35&properties=email,firstname,lastname,id_usuario_quickbooks`;
+      if (after) {
+        url += `&after=${after}`; // Agregamos el cursor para la siguiente página
+      }
+
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      // Sumamos los contactos de esta página a nuestra lista total
+      allContacts = allContacts.concat(response.data.results);
+      
+      // Verificamos si hay más páginas
+      after = response.data.paging?.next?.after;
+      
+    } while (after);
+
+    console.log(`Se descargaron ${allContacts.length} contactos de HubSpot.`);
+    return allContacts;
+
+  } catch (error) {
+    console.error("Error obteniendo todos los contactos de HubSpot:", error.response?.data || error.message);
+    throw error;
+  }
+};
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
+  getAllContacts,
 };

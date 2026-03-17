@@ -1,5 +1,6 @@
 const fastify = require("fastify")({ logger: true });
 const webhookRoutes = require("./routes/webhook.routes");
+const migrationRoutes = require('./routes/migration.routes.js');
 
 //Ruta de prueba
 fastify.get("/", async (request, reply) => {
@@ -9,5 +10,7 @@ fastify.get("/", async (request, reply) => {
 // Registramos nuestras rutas en la aplicación
 fastify.register(webhookRoutes.webhookRoutes);
 fastify.register(webhookRoutes.hubSpotWebhook);
+fastify.register(migrationRoutes);
+
 
 module.exports = fastify;
