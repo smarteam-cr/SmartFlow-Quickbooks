@@ -1,4 +1,4 @@
-const fastify = require("fastify")({ logger: true });
+const fastify = require("fastify")({ logger: false });
 const webhookRoutes = require("./routes/webhook.routes");
 const migrationRoutes = require('./routes/migration.routes.js');
 

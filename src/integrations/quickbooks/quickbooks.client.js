@@ -1,7 +1,7 @@
-require('dotenv').config();
+const config = require('../../config');
 const axios = require('axios');
 
-const BASE_URL = process.env.QB_SANDBOX_BASE_URL;
+const BASE_URL = config.quickbooks.baseUrl;
 
 async function getPaymentDetails(realmId, paymentId, accessToken) {
   const url = `${BASE_URL}/${realmId}/payment/${paymentId}`;
@@ -22,16 +22,16 @@ async function getPaymentDetails(realmId, paymentId, accessToken) {
 
 async function findCustomerByEmail(email) {
   try {
-    const realmId = process.env.QB_REALM_ID;
+    const realmId = config.quickbooks.realmId;
 
     // Armamos la consulta tipo SQL que exige la API de QuickBooks
     const query = `SELECT * FROM Customer WHERE PrimaryEmailAddr = '${email}'`;
 
-    const url = `${process.env.QB_SANDBOX_BASE_URL}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
 
     const response = await axios.get(url, {
       headers: {
-        Authorization: `Bearer ${process.env.QB_TEST_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
         Accept: 'application/json',
       },
     });
@@ -52,8 +52,8 @@ async function findCustomerByEmail(email) {
 
 async function createCustomer(customerData) {
   try {
-    const realmId = process.env.QB_REALM_ID;
-    const url = `${process.env.QB_SANDBOX_BASE_URL}/${realmId}/customer?minorversion=65`;
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/customer?minorversion=65`;
 
     // Armamos el "Payload" (el cuerpo del mensaje) tal como lo exige QuickBooks
     const payload = {
@@ -68,7 +68,7 @@ async function createCustomer(customerData) {
 
     const response = await axios.post(url, payload, {
       headers: {
-        Authorization: `Bearer ${process.env.QB_TEST_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },

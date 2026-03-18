@@ -1,3 +1,4 @@
+const config = require('../../config');
 const axios = require('axios');
 
 async function getContactDetails(contactId) {
@@ -10,7 +11,7 @@ async function getContactDetails(contactId) {
       `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=${properties}`,
       {
         headers: {
-          Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
           'Content-Type': 'application/json',
         },
       },
@@ -46,7 +47,7 @@ async function updateContactProperty(contactId, qbId) {
       payload,
       {
         headers: {
-          Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
           'Content-Type': 'application/json'
         }
       }
@@ -75,7 +76,7 @@ async function getAllContacts () {
 
       const response = await axios.get(url, {
         headers: {
-          Authorization: `Bearer ${process.env.HUBSPOT_ACCESS_TOKEN}`,
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
           'Content-Type': 'application/json'
         }
       });

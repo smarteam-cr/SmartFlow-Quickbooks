@@ -1,9 +1,10 @@
+const config = require('../config');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 
 /**
  * Procesa el payload (cuerpo) del webhook que envía QuickBooks
  */
-async function procesarNotificacion(payload) {
+async function processPaymentNotification(payload) {
 	try {
 		// QuickBooks envía un arreglo de notificaciones, lo recorremos
 		const notificaciones = payload.eventNotifications;
@@ -22,7 +23,7 @@ async function procesarNotificacion(payload) {
 
 					// En el futuro, aquí iremos a MongoDB a buscar el token de este realmId.
 					// Por ahora, para nuestra PoC, usamos el del .env:
-					const accessToken = process.env.QB_TEST_ACCESS_TOKEN;
+					const accessToken = config.quickbooks.accessToken;
 
 					// Llamamos a nuestra integración para traer el dinero
 					const detallesPago = await quickbooksClient.getPaymentDetails(realmId, paymentId, accessToken);
@@ -43,4 +44,4 @@ async function procesarNotificacion(payload) {
 	}
 }
 
-module.exports = { procesarNotificacion };
+module.exports = { processPaymentNotification };
