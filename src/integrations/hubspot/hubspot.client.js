@@ -98,8 +98,36 @@ async function getAllContacts () {
   }
 };
 
+async function batchCreateContacts(contacts) {
+  try {
+    const payload = { inputs: contacts };
+
+    const response = await axios.post(
+      'https://api.hubapi.com/crm/v3/objects/contacts/batch/create',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    // El batch puede devolver 207 (multi-status) o 400 con errores parciales
+    // Si hay respuesta con data, la retornamos para que el servicio la analice
+    if (error.response?.data) {
+      return error.response.data;
+    }
+    console.error('Error en batch create de HubSpot:', error.message);
+    throw error;
+  }
+};
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
   getAllContacts,
+  batchCreateContacts,
 };

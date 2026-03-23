@@ -84,4 +84,25 @@ async function createCustomer(customerData) {
   }
 }
 
-module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer };
+async function getAllCustomers() {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const query = 'SELECT * FROM Customer MAXRESULTS 4';
+    const url = `${config.quickbooks.baseUrl}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    // Si no hay clientes, QueryResponse puede venir sin la propiedad Customer
+    return response.data.QueryResponse.Customer || [];
+  } catch (error) {
+    console.error('Error obteniendo clientes de QuickBooks:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer, getAllCustomers };
