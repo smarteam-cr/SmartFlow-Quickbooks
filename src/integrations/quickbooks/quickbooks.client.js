@@ -87,9 +87,8 @@ async function createCustomer(customerData) {
 async function getAllCustomers() {
   try {
     const realmId = config.quickbooks.realmId;
-    const query = "SELECT * FROM Customer where Id > '59' MAXRESULTS 2";
+    const query = "SELECT * FROM Customer WHERE Id > '57' ";
     const url = `${config.quickbooks.baseUrl}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
-
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${config.quickbooks.accessToken}`,
@@ -105,4 +104,4 @@ async function getAllCustomers() {
   }
 }
 
-module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer, getAllCustomers };
+module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer, getAllCustomers,  };

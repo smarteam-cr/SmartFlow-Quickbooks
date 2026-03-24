@@ -125,9 +125,14 @@ async function batchCreateContacts(contacts) {
   }
 };
 
-async function createCompany(companyName) {
+async function createCompany(companyName, qbId) {
   try {
-    const payload = { properties: { name: companyName } };
+    const payload = { 
+      properties: { 
+        name: companyName,
+        id_usuario_quickbooks: qbId.toString() // Guardamos el ID del Padre
+      } 
+    };
     const response = await axios.post(
       'https://api.hubapi.com/crm/v3/objects/companies',
       payload,
@@ -145,13 +150,14 @@ async function createCompany(companyName) {
   }
 }
 
-async function createSingleContact(contactData) {
+async function createSingleContact(contactData, qbId) {
   try {
     const payload = {
       properties: {
         firstname: contactData.firstname || '',
         lastname: contactData.lastname || '',
-        email: contactData.email || ''
+        email: contactData.email || '',
+        id_usuario_quickbooks: qbId ? qbId.toString() : '' // Guardamos el ID del Hijo
       }
     };
     const response = await axios.post(
@@ -166,10 +172,8 @@ async function createSingleContact(contactData) {
     );
     return response.data;
   } catch (error) {
-    // Manejo inteligente: Si el contacto ya existe (Error 409), extraemos su ID para poder asociarlo de todos modos
     if (error.response?.status === 409) {
       console.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
-      // HubSpot devuelve el ID existente en el mensaje de error "Contact already exists. Existing ID: 12345"
       const existingId = error.response.data.message.match(/\d+/)[0];
       return { id: existingId }; 
     }
@@ -198,6 +202,40 @@ async function associateContactToCompany(contactId, companyId) {
   }
 }
 
+async function searchCompanyByQbId(qbId) {
+  try {
+    const payload = {
+      filterGroups: [{
+        filters: [{
+          propertyName: "id_usuario_quickbooks",
+          operator: "EQ",
+          value: qbId.toString()
+        }]
+      }]
+    };
+
+    const response = await axios.post(
+      'https://api.hubapi.com/crm/v3/objects/companies/search',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    // Si encuentra la empresa, devuelve su ID de HubSpot. Si no, devuelve null.
+    if (response.data.total > 0) {
+      return response.data.results[0].id;
+    }
+    return null; 
+  } catch (error) {
+    console.error(`Error buscando empresa con QB ID ${qbId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -206,4 +244,5 @@ module.exports = {
   createCompany,
   createSingleContact,
   associateContactToCompany,
+  searchCompanyByQbId,
 };
