@@ -1,17 +1,25 @@
 const testSyncService = require('../services/test-sync.service');
 
-const syncCustomers = async (request, reply) => {
+async function syncCustomers(request, reply) {
   try {
-    const resultado = await testSyncService.syncCustomersToHubSpot();
+    console.log('[Controller] Petición de sincronización (QB -> HS) recibida');
+    
+    // Delegamos la lógica pesada al servicio
+    const resultados = await testSyncService.executeSync();
 
-    return reply.code(200).send(resultado);
-  } catch (error) {
-    console.error('Error crítico en la sincronización de prueba:', error);
-    return reply.code(500).send({
-      error: 'Falló la sincronización de prueba',
-      detalle: error.message,
+    if (!resultados) {
+      return reply.status(200).send({ message: 'No se encontraron clientes en QuickBooks para procesar.' });
+    }
+
+    return reply.status(200).send({ 
+      message: 'Sincronización finalizada con éxito', 
+      resultados 
     });
+
+  } catch (error) {
+    console.error('[Controller] Error crítico en la petición:', error);
+    return reply.status(500).send({ error: 'Fallo interno durante la sincronización.' });
   }
-};
+}
 
 module.exports = { syncCustomers };

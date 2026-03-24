@@ -1,88 +1,63 @@
-const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
+const qbClient = require('../integrations/quickbooks/quickbooks.client');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 
-async function syncCustomersToHubSpot() {
-  console.log('\n=== INICIANDO SINCRONIZACIÓN DE PRUEBA QB → HubSpot ===');
-
-  // ── Fase 3: Extracción desde QuickBooks ──
-  const qbCustomers = await quickbooksClient.getAllCustomers();
-
-  if (qbCustomers.length === 0) {
-    console.log('No se encontraron clientes en QuickBooks Sandbox.');
-    return {
-      message: 'No hay clientes en QuickBooks para procesar',
-      totalLeidos: 0,
-      totalFiltrados: 0,
-      totalEnviados: 0,
-      totalCreados: 0,
-      errores: [],
-    };
+async function executeSync() {
+  console.log('[Service] Iniciando extracción de clientes desde QuickBooks...');
+  
+  const customers = await qbClient.getAllCustomers(); // Trae MAXRESULTS 4
+  
+  if (!customers || customers.length === 0) {
+    return null; // El controlador manejará este estado
   }
 
-  console.log(`Se encontraron ${qbCustomers.length} clientes en QuickBooks.`);
+  let resultados = { empresasCreadas: 0, contactosCreados: 0, asociaciones: 0 };
 
-  // ── Fase 4: Transformación y Mapeo ──
-  const contactsMapeados = [];
-  let totalFiltrados = 0;
+  for (const customer of customers) {
+    const companyName = customer.CompanyName;
+    const givenName = customer.GivenName;
+    const familyName = customer.FamilyName;
+    const email = customer.PrimaryEmailAddr?.Address;
 
-  for (const customer of qbCustomers) {
-    const firstName = customer.GivenName || '';
-    const lastName = customer.FamilyName || '';
-    const email = customer.PrimaryEmailAddr?.Address || '';
+    console.log(`\n[Service] Evaluando cliente QB: ${customer.DisplayName}`);
 
-    // Filtrado: ignorar si no tiene nombre o email válido
-    if (!email || (!firstName && !lastName)) {
-      console.log(`Filtrado: cliente "${customer.DisplayName}" sin email o nombre válido.`);
-      totalFiltrados++;
-      continue;
+    // REGLA 3: Mixto (B2B - Tiene Empresa y Persona)
+    if (companyName && (givenName || familyName)) {
+      console.log(' -> Regla Mixta: Creando Empresa y Contacto...');
+      const hsCompany = await hubspotClient.createCompany(companyName);
+      resultados.empresasCreadas++;
+
+      const hsContact = await hubspotClient.createSingleContact({
+        firstname: givenName,
+        lastname: familyName,
+        email: email
+      });
+      resultados.contactosCreados++;
+
+      await hubspotClient.associateContactToCompany(hsContact.id, hsCompany.id);
+      resultados.asociaciones++;
+      console.log(' -> Asociación exitosa.');
+    } 
+    // REGLA 1: Solo Empresa
+    else if (companyName && !givenName && !familyName) {
+      console.log(' -> Regla Empresa: Creando solo registro de Empresa...');
+      await hubspotClient.createCompany(companyName);
+      resultados.empresasCreadas++;
+    } 
+    // REGLA 2: Solo Contacto
+    else if (!companyName && (givenName || familyName)) {
+      console.log(' -> Regla Contacto: Creando solo registro de Contacto...');
+      await hubspotClient.createSingleContact({
+        firstname: givenName,
+        lastname: familyName,
+        email: email
+      });
+      resultados.contactosCreados++;
+    } else {
+      console.log(' -> Ignorado: Faltan datos clave (Sin empresa ni nombre).');
     }
-
-    contactsMapeados.push({
-      properties: {
-        firstname: firstName,
-        lastname: lastName,
-        email: email,
-      },
-    });
   }
 
-  console.log(`Contactos mapeados para HubSpot: ${contactsMapeados.length} (filtrados: ${totalFiltrados})`);
-
-  if (contactsMapeados.length === 0) {
-    return {
-      message: 'Todos los clientes fueron filtrados (sin email o nombre válido)',
-      totalLeidos: qbCustomers.length,
-      totalFiltrados,
-      totalEnviados: 0,
-      totalCreados: 0,
-      errores: [],
-    };
-  }
-
-  // ── Fase 5: Inyección a HubSpot vía Batch API ──
-  const hubspotResponse = await hubspotClient.batchCreateContacts(contactsMapeados);
-
-  // ── Fase 6: Consolidar resultados ──
-  const totalCreados = hubspotResponse.results?.length || 0;
-  const errores = hubspotResponse.errors || [];
-
-  if (errores.length > 0) {
-    console.log(`HubSpot reportó ${errores.length} error(es) en el batch.`);
-  }
-
-  console.log('=== SINCRONIZACIÓN DE PRUEBA FINALIZADA ===\n');
-
-  return {
-    message: 'Sincronización de prueba completada',
-    totalLeidos: qbCustomers.length,
-    totalFiltrados,
-    totalEnviados: contactsMapeados.length,
-    totalCreados,
-    errores: errores.map(err => ({
-      categoria: err.category || 'UNKNOWN',
-      mensaje: err.message || JSON.stringify(err),
-    })),
-  };
+  return resultados;
 }
 
-module.exports = { syncCustomersToHubSpot };
+module.exports = { executeSync };

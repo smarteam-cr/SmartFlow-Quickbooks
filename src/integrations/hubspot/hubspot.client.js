@@ -125,9 +125,85 @@ async function batchCreateContacts(contacts) {
   }
 };
 
+async function createCompany(companyName) {
+  try {
+    const payload = { properties: { name: companyName } };
+    const response = await axios.post(
+      'https://api.hubapi.com/crm/v3/objects/companies',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data; // Retorna el objeto que incluye el ID generado
+  } catch (error) {
+    console.error(`Error creando la empresa ${companyName} en HubSpot:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async function createSingleContact(contactData) {
+  try {
+    const payload = {
+      properties: {
+        firstname: contactData.firstname || '',
+        lastname: contactData.lastname || '',
+        email: contactData.email || ''
+      }
+    };
+    const response = await axios.post(
+      'https://api.hubapi.com/crm/v3/objects/contacts',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    // Manejo inteligente: Si el contacto ya existe (Error 409), extraemos su ID para poder asociarlo de todos modos
+    if (error.response?.status === 409) {
+      console.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
+      // HubSpot devuelve el ID existente en el mensaje de error "Contact already exists. Existing ID: 12345"
+      const existingId = error.response.data.message.match(/\d+/)[0];
+      return { id: existingId }; 
+    }
+    console.error('Error creando contacto en HubSpot:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async function associateContactToCompany(contactId, companyId) {
+  try {
+    // Tipo de asociación 279 o 1 es el identificador por defecto para Company -> Contact en HubSpot (Depende de la versión de portal, usaremos la sintaxis estándar de v3)
+    const response = await axios.put(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(`Error asociando Contacto ${contactId} a Empresa ${companyId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
   getAllContacts,
   batchCreateContacts,
+  createCompany,
+  createSingleContact,
+  associateContactToCompany,
 };
