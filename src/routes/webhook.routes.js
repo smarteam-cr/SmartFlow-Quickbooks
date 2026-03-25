@@ -8,7 +8,7 @@ async function webhookRoutes(fastify, options) {
 
 async function hubSpotWebhook(fastify, opts) {
   // Definimos que cuando llegue un POST a /webhook/hubspot, lo maneje el controlador de HubSpot
-  fastify.post('/webhook/hubspot', webhookController.handleHubSpotWebhook);
+  fastify.post('/webhook/hubspot2', webhookController.handleHubSpotWebhook);
 }
 
 module.exports = { webhookRoutes, hubSpotWebhook };

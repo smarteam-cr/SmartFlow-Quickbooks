@@ -1,16 +1,14 @@
 const webhookService = require('../services/webhook.service');
 const contactSyncService = require('../services/contact.sync.service');
+const companySyncService = require('../services/company.sync.service'); // <-- NUEVO
 
 async function handleQuickBooksWebhook(request, reply) {
   try {
     console.log('[Controller] Webhook de QuickBooks recibido');
-
     const payload = request.body;
-
     webhookService.processPaymentNotification(payload).catch(err => {
       console.error('Error en el proceso en segundo plano:', err.message);
     });
-
     return reply.status(200).send('Webhook recibido y en proceso');
   } catch (error) {
     console.error('Error en el controlador:', error);
@@ -23,12 +21,18 @@ const handleHubSpotWebhook = async (request, reply) => {
     const events = request.body;
 
     for (const event of events) {
+      // SI ES UN CONTACTO
       if (event.subscriptionType === 'contact.creation') {
         const contactId = event.objectId;
-        console.log(`\n=== Procesando nuevo contacto ID: ${contactId} ===`);
-
+        console.log(`\n=== [Webhook] Procesando nuevo contacto ID: ${contactId} ===`);
         await contactSyncService.processContact(contactId);
-
+        console.log('=================================================');
+      } 
+      // SI ES UNA EMPRESA (NUEVO BLOQUE)
+      else if (event.subscriptionType === 'company.creation') {
+        const companyId = event.objectId;
+        console.log(`\n=== [Webhook] Procesando nueva EMPRESA ID: ${companyId} ===`);
+        await companySyncService.processCompany(companyId);
         console.log('=================================================');
       }
     }

@@ -60,6 +60,28 @@ async function updateContactProperty(contactId, qbId) {
   }
 };
 
+async function updateCompanyProperty(companyId, qbId) {
+  try {
+    const payload = {
+      properties: { "id_usuario_quickbooks": qbId.toString() }
+    };
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(`Error actualizando el ID en HubSpot para la empresa ${companyId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 async function getAllContacts () {
   try {
     let allContacts = [];
@@ -236,6 +258,119 @@ async function searchCompanyByQbId(qbId) {
   }
 }
 
+async function getAllCompanies() {
+  try {
+    let allCompanies = [];
+    let after = undefined;
+
+    console.log('Descargando empresas de HubSpot...');
+
+    do {
+      let url = `https://api.hubapi.com/crm/v3/objects/companies?limit=100&properties=name,domain,id_usuario_quickbooks`;
+      if (after) {
+        url += `&after=${after}`;
+      }
+
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      allCompanies = allCompanies.concat(response.data.results);
+      after = response.data.paging?.next?.after;
+
+    } while (after);
+
+    console.log(`Se descargaron ${allCompanies.length} empresas de HubSpot.`);
+    return allCompanies;
+
+  } catch (error) {
+    console.error('Error obteniendo empresas de HubSpot:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async function getAssociatedContactIds(companyId) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    // La API retorna { results: [{ id: "contactId", type: "..." }, ...] }
+    return response.data.results.map(assoc => assoc.toObjectId);
+
+  } catch (error) {
+    // Si no tiene asociaciones, la API puede devolver un 404 o un array vacío
+    if (error.response?.status === 404) {
+      return [];
+    }
+    console.error(`Error obteniendo asociaciones de la empresa ${companyId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async function getAllContactsWithCompanyAssociations() {
+  try {
+    let allContacts = [];
+    let after = undefined;
+    
+    console.log("Descargando contactos de HubSpot con sus asociaciones (Padres)...");
+
+    do {
+      // El secreto está en el parámetro &associations=company
+      let url = `https://api.hubapi.com/crm/v3/objects/contacts?limit=100&properties=email,firstname,lastname,company&associations=company`;
+      if (after) {
+        url += `&after=${after}`; 
+      }
+
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      allContacts = allContacts.concat(response.data.results);
+      after = response.data.paging?.next?.after;
+      
+    } while (after);
+
+    console.log(`Se descargaron ${allContacts.length} contactos con asociaciones.`);
+    return allContacts;
+
+  } catch (error) {
+    console.error("Error obteniendo contactos con asociaciones:", error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async function getCompanyDetails(companyId) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}?properties=name,domain,id_usuario_quickbooks`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) return null;
+    console.error(`Error obteniendo detalles de empresa ${companyId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -245,4 +380,9 @@ module.exports = {
   createSingleContact,
   associateContactToCompany,
   searchCompanyByQbId,
+  getAllCompanies,
+  getAssociatedContactIds,
+  getAllContactsWithCompanyAssociations,
+  updateCompanyProperty,
+  getCompanyDetails,
 };
