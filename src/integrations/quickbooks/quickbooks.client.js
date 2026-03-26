@@ -1,5 +1,5 @@
-const config = require('../../config');
-const axios = require('axios');
+const config = require("../../config");
+const axios = require("axios");
 
 const BASE_URL = config.quickbooks.baseUrl;
 
@@ -9,7 +9,7 @@ async function getPaymentDetails(realmId, paymentId, accessToken) {
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
+        Accept: "application/json",
       },
     });
     return response.data;
@@ -32,7 +32,7 @@ async function findCustomerByEmail(email) {
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${config.quickbooks.accessToken}`,
-        Accept: 'application/json',
+        Accept: "application/json",
       },
     });
 
@@ -45,7 +45,10 @@ async function findCustomerByEmail(email) {
       return null; // Retornamos null si el cliente no existe en QB
     }
   } catch (error) {
-    console.error('Error buscando cliente en QuickBooks:', error.response?.data || error.message);
+    console.error(
+      "Error buscando cliente en QuickBooks:",
+      error.response?.data || error.message,
+    );
     throw error;
   }
 }
@@ -55,7 +58,7 @@ async function findCustomerByEmail(email) {
  * - Empresa pura (Padre): pasa { companyName }
  * - Sub-customer (Hijo): pasa { firstName, lastName, email, parentRef, companyName }
  * - Contacto B2C estándar: pasa { firstName, lastName, email }
- * 
+ *
  * @param {Object} customerData
  * @param {string} [customerData.companyName] - Nombre de empresa (crea empresa pura si no hay firstName/lastName)
  * @param {string} [customerData.firstName]
@@ -69,7 +72,10 @@ async function createCustomer(customerData) {
     const realmId = config.quickbooks.realmId;
     const url = `${config.quickbooks.baseUrl}/${realmId}/customer?minorversion=65`;
 
-    const isCompany = customerData.companyName && !customerData.firstName && !customerData.lastName;
+    const isCompany =
+      customerData.companyName &&
+      !customerData.firstName &&
+      !customerData.lastName;
 
     // Armamos el DisplayName según el tipo de registro
     let displayName;
@@ -78,11 +84,13 @@ async function createCustomer(customerData) {
       displayName = customerData.companyName;
     } else if (customerData.parentRef && customerData.companyName) {
       // Sub-customer (Hijo): "Nombre (Empresa)"
-      const fullName = `${customerData.firstName || ''} ${customerData.lastName || ''}`.trim();
+      const fullName =
+        `${customerData.firstName || ""} ${customerData.lastName || ""}`.trim();
       displayName = `${fullName} (${customerData.companyName})`;
     } else {
       // B2C estándar
-      displayName = `${customerData.firstName || ''} ${customerData.lastName || ''}`.trim();
+      displayName =
+        `${customerData.firstName || ""} ${customerData.lastName || ""}`.trim();
     }
 
     const payload = {
@@ -91,8 +99,8 @@ async function createCustomer(customerData) {
 
     // Campos de persona (solo si no es empresa pura)
     if (!isCompany) {
-      payload.GivenName = customerData.firstName || '';
-      payload.FamilyName = customerData.lastName || '';
+      payload.GivenName = customerData.firstName || "";
+      payload.FamilyName = customerData.lastName || "";
     }
 
     // CompanyName (para empresas y sub-customers)
@@ -113,22 +121,23 @@ async function createCustomer(customerData) {
 
     // Vínculo bidireccional: guardamos el ID de HubSpot en el campo Notes
     if (customerData.hsId) {
-      const prefix = isCompany ? 'HS_COMPANY_ID' : 'HS_CONTACT_ID';
+      const prefix = isCompany ? "HS_COMPANY_ID" : "HS_CONTACT_ID";
       payload.Notes = `${prefix}:${customerData.hsId}`;
     }
 
     const response = await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${config.quickbooks.accessToken}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
+        Accept: "application/json",
+        "Content-Type": "application/json",
       },
     });
 
     return response.data.Customer;
   } catch (error) {
-    const intuitError = error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
-    console.error('Error creando cliente en QuickBooks:', intuitError);
+    const intuitError =
+      error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error("Error creando cliente en QuickBooks:", intuitError);
     throw error;
   }
 }
@@ -146,7 +155,7 @@ async function findCustomerByDisplayName(displayName) {
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${config.quickbooks.accessToken}`,
-        Accept: 'application/json',
+        Accept: "application/json",
       },
     });
 
@@ -156,7 +165,10 @@ async function findCustomerByDisplayName(displayName) {
     }
     return null;
   } catch (error) {
-    console.error('Error buscando cliente por DisplayName en QuickBooks:', error.response?.data || error.message);
+    console.error(
+      "Error buscando cliente por DisplayName en QuickBooks:",
+      error.response?.data || error.message,
+    );
     throw error;
   }
 }
@@ -169,16 +181,103 @@ async function getAllCustomers() {
     const response = await axios.get(url, {
       headers: {
         Authorization: `Bearer ${config.quickbooks.accessToken}`,
-        Accept: 'application/json',
+        Accept: "application/json",
       },
     });
 
     // Si no hay clientes, QueryResponse puede venir sin la propiedad Customer
     return response.data.QueryResponse.Customer || [];
   } catch (error) {
-    console.error('Error obteniendo clientes de QuickBooks:', error.response?.data || error.message);
+    console.error(
+      "Error obteniendo clientes de QuickBooks:",
+      error.response?.data || error.message,
+    );
     throw error;
   }
 }
 
-module.exports = { getPaymentDetails, findCustomerByEmail, createCustomer, findCustomerByDisplayName, getAllCustomers };
+async function findItemByName(itemName) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    // Escapamos comillas simples en el nombre para evitar errores de sintaxis SQL en QBO
+    const safeName = itemName.replace(/'/g, "\\'");
+    const query = `SELECT * FROM Item WHERE Name = '${safeName}'`;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: "application/json",
+      },
+    });
+
+    const itemInfo = response.data.QueryResponse.Item;
+    if (itemInfo && itemInfo.length > 0) {
+      return itemInfo[0];
+    }
+    return null;
+  } catch (error) {
+    console.error(
+      "Error buscando Item por nombre en QuickBooks:",
+      error.response?.data || error.message,
+    );
+    throw error;
+  }
+}
+
+async function createItem(itemData) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/item?minorversion=65`;
+
+    const response = await axios.post(url, itemData, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data.Item;
+  } catch (error) {
+    const intuitError =
+      error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error("Error creando Item en QuickBooks:", intuitError);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene los detalles completos de un Item en QuickBooks usando su ID.
+ * Requerido porque los webhooks de QB solo envían el ID de la entidad.
+ * @param {string} itemId - El ID interno del Item en QuickBooks.
+ */
+async function getItemById(itemId) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/item/${itemId}?minorversion=65`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    return response.data.Item;
+  } catch (error) {
+    console.error(`Error obteniendo Item ${itemId} en QuickBooks:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+module.exports = {
+  getPaymentDetails,
+  findCustomerByEmail,
+  createCustomer,
+  findCustomerByDisplayName,
+  getAllCustomers,
+  findItemByName,
+  createItem,
+  getItemById,
+};

@@ -8,8 +8,7 @@ fastify.get("/", async (request, reply) => {
 });
 
 // Registramos nuestras rutas en la aplicación
-fastify.register(webhookRoutes.webhookRoutes);
-fastify.register(webhookRoutes.hubSpotWebhook);
+fastify.register(webhookRoutes, { prefix: '/webhook' });
 fastify.register(migrationRoutes);
 
 

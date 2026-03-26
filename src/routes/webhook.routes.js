@@ -1,14 +1,14 @@
 const webhookController = require('../controllers/webhook.controller');
 
 async function webhookRoutes(fastify, options) {
-  // Definimos que cuando llegue un POST a /webhook, lo maneje el controlador de QuickBooks
-  fastify.post('/webhook', webhookController.handleQuickBooksWebhook);
+  // Definimos que cuando llegue un POST a /quickbooks, lo maneje el controlador de QuickBooks
+  fastify.post('/quickbooks', webhookController.handleQuickBooksWebhook);
+
+  // Definimos que cuando llegue un POST a /hubspot2, lo maneje el controlador de HubSpot
+  fastify.post('/hubspot2', webhookController.handleHubSpotWebhook);
+
+  // Definimos que cuando llegue un POST a /hubspot/deal-simulated, lo maneje el controlador de HubSpot
+  fastify.post('/hubspot/deal-simulated', webhookController.handleHubspotDealWebhook);
 }
 
-
-async function hubSpotWebhook(fastify, opts) {
-  // Definimos que cuando llegue un POST a /webhook/hubspot, lo maneje el controlador de HubSpot
-  fastify.post('/webhook/hubspot2', webhookController.handleHubSpotWebhook);
-}
-
-module.exports = { webhookRoutes, hubSpotWebhook };
+module.exports = webhookRoutes;
