@@ -615,6 +615,124 @@ async function searchProductByQbId(qbId) {
   }
 }
 
+/**
+ * Obtiene los detalles de una Factura (Invoice) en HubSpot.
+ */
+async function getInvoiceDetails(invoiceId) {
+  try {
+    // Propiedades: monto total, estado, y nuestra propiedad personalizada
+    const properties = "hs_invoice_total,hs_status,hs_title,id_factura_quickbooks";
+    
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      console.warn(`La factura ${invoiceId} devolvió 404 en HubSpot.`);
+      return null;
+    }
+    console.error(`Error obteniendo la factura ${invoiceId} de HubSpot:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene las asociaciones de una Factura (Invoice).
+ * Puede buscar contactos, empresas o line_items asociados.
+ * @param {string} invoiceId - ID de la factura.
+ * @param {string} toObjectType - 'contacts', 'companies', o 'line_items'.
+ */
+async function getInvoiceAssociations(invoiceId, toObjectType) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/${toObjectType}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    
+    // Retornamos un arreglo plano con los IDs encontrados
+    return response.data.results.map((assoc) => assoc.id);
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return []; // No tiene asociaciones de este tipo
+    }
+    console.error(`Error obteniendo asociaciones de ${toObjectType} para la factura ${invoiceId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza la factura en HubSpot para guardar el ID generado por QuickBooks.
+ */
+async function updateInvoiceProperty(invoiceId, qbInvoiceId) {
+  try {
+    const payload = {
+      properties: {
+        id_factura_quickbooks: qbInvoiceId.toString(),
+      },
+    };
+
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error(`Error actualizando el ID en HubSpot para la factura ${invoiceId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene los detalles completos de múltiples Line Items por sus IDs.
+ * @param {Array<string>} lineItemIds - Arreglo de IDs de Line Items.
+ */
+async function getLineItemsDetails(lineItemIds) {
+  if (!lineItemIds || lineItemIds.length === 0) return [];
+
+  try {
+    const batchPayload = {
+      inputs: lineItemIds.map(id => ({ id })),
+      // Pedimos las propiedades vitales, incluyendo nuestra ancla de QuickBooks
+      properties: ["name", "price", "quantity", "hs_sku", "id_producto_quickbooks"]
+    };
+
+    const response = await axios.post(
+      "https://api.hubapi.com/crm/v3/objects/line_items/batch/read",
+      batchPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data.results;
+  } catch (error) {
+    console.error("Error obteniendo detalles de los Line Items:", error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -635,4 +753,8 @@ module.exports = {
   updateProductProperty,
   createProduct,
   searchProductByQbId,
+  getInvoiceDetails,
+  getInvoiceAssociations,
+  updateInvoiceProperty,
+  getLineItemsDetails,
 };

@@ -1,7 +1,8 @@
 const webhookService = require('../services/webhook.service');
 const contactSyncService = require('../services/contact.sync.service');
 const companySyncService = require('../services/company.sync.service');
-const productSyncService = require('../services/product.sync.service'); // Importación del nuevo servicio
+const productSyncService = require('../services/product.sync.service');
+const invoiceSyncService = require('../services/invoice.sync.service');
 
 async function handleQuickBooksWebhook(request, reply) {
   try {
@@ -20,6 +21,12 @@ async function handleQuickBooksWebhook(request, reply) {
 const handleHubSpotWebhook = async (request, reply) => {
   try {
     const events = request.body;
+    
+    // 1. TRAMPA DE DEPURACIÓN: Imprimir TODO lo que llega de HubSpot
+    console.log('\n======================================================');
+    console.log('🔔 WEBHOOK RECIBIDO DESDE HUBSPOT');
+    console.log(JSON.stringify(events, null, 2));
+    console.log('======================================================\n');
 
     for (const event of events) {
       if (event.subscriptionType === 'contact.creation') {
@@ -34,12 +41,19 @@ const handleHubSpotWebhook = async (request, reply) => {
         await companySyncService.processCompany(companyId);
         console.log('=================================================');
       }
-      // Captura y enrutamiento del evento de creación de productos
       else if (event.subscriptionType === 'product.creation') {
         const productId = event.objectId;
         console.log(`\n=== [Webhook] Procesando nuevo PRODUCTO ID: ${productId} ===`);
         await productSyncService.syncProductToQuickbooks(productId);
         console.log('=================================================');
+      }
+      // 2. CAMBIO AQUÍ: Ahora buscamos 'object.creation' en lugar de 'invoice.creation'
+      else if (event.subscriptionType === 'object.creation') {
+        const invoiceId = event.objectId;
+        console.log(`\n=== [Webhook] Procesando nueva FACTURA (Object) ID: ${invoiceId} ===`);
+        invoiceSyncService.syncInvoiceToQuickbooks(invoiceId).catch(err => {
+          console.error('Fallo en el proceso de fondo de la factura:', err.message);
+        });
       }
     }
 

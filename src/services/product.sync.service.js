@@ -1,40 +1,42 @@
 const config = require('../config');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
+const echoSuppression = require('../utils/echo.suppression.util');
 
 /**
  * Sincroniza un producto recién creado desde HubSpot hacia QuickBooks.
- * Implementa idempotencia y previene errores por nombres duplicados.
- * * @param {string|number} hsProductId - El ID del producto que origina el webhook en HubSpot.
+ * @param {string|number} hsProductId - ID del producto desde el webhook de HubSpot.
  */
 async function syncProductToQuickbooks(hsProductId) {
   try {
+    // 1. Supresión de Eco: Verifica si este webhook fue provocado por el propio sistema
+    if (echoSuppression.wasCreatedInHs(hsProductId)) {
+      console.log(`[Echo Suppression] Producto HS ${hsProductId} fue creado por el sistema. Ignorando webhook.`);
+      return hsProductId;
+    }
+
     const hsProduct = await hubspotClient.getProductDetails(hsProductId);
 
     if (!hsProduct) {
-      console.warn(`Producto ${hsProductId} no encontrado en HubSpot. Sincronización abortada.`);
+      console.warn(`Producto ${hsProductId} no encontrado en HubSpot.`);
       return null;
     }
 
-    // 1. Verificación de idempotencia
-    // Si el producto ya tiene un ID de QuickBooks asignado, se detiene el flujo para evitar duplicados.
+    // 2. Validación de Idempotencia en base de datos
     if (hsProduct.properties.id_producto_quickbooks) {
-      console.log(`El producto ${hsProductId} ya posee un ID de QuickBooks (${hsProduct.properties.id_producto_quickbooks}). Omitiendo creación.`);
+      console.log(`Producto ${hsProductId} ya posee ID de QuickBooks (${hsProduct.properties.id_producto_quickbooks}).`);
       return hsProduct.properties.id_producto_quickbooks;
     }
 
     const productName = hsProduct.properties.name;
     let qbItemId;
 
-    // 2. Validación de restricción de nombre único en QuickBooks
-    // La API de Intuit devuelve error 400 si se intenta crear un Item con un nombre existente.
     const existingQbItem = await quickbooksClient.findItemByName(productName);
 
     if (existingQbItem) {
-      console.log(`El producto "${productName}" ya existe en QuickBooks con ID ${existingQbItem.Id}. Se procederá a vincularlos.`);
+      console.log(`Producto "${productName}" ya existe en QuickBooks (ID ${existingQbItem.Id}). Vinculando.`);
       qbItemId = existingQbItem.Id;
     } else {
-      // 3. Mapeo de datos y creación del Item en QuickBooks
       const qbItemPayload = {
         Name: productName,
         Description: hsProduct.properties.description || "",
@@ -52,36 +54,45 @@ async function syncProductToQuickbooks(hsProductId) {
 
       const newQbItem = await quickbooksClient.createItem(qbItemPayload);
       qbItemId = newQbItem.Id;
+      
+      // 3. Registro en caché: Marca el ID generado en QB para ignorar su posterior webhook
+      echoSuppression.markAsCreatedInQb(qbItemId);
+      
       console.log(`Producto "${productName}" creado en QuickBooks con ID: ${qbItemId}`);
     }
 
-    // 4. Actualización del registro en HubSpot (El Ancla)
+    // 4. Actualización del ancla
     await hubspotClient.updateProductProperty(hsProductId, qbItemId);
     console.log(`Propiedad id_producto_quickbooks actualizada en HubSpot para el producto ${hsProductId}.`);
 
     return qbItemId;
 
   } catch (error) {
-    console.error(`Error en la sincronización del producto ${hsProductId} hacia QuickBooks:`, error.message);
+    console.error(`Error sincronizando producto ${hsProductId} hacia QuickBooks:`, error.message);
     throw error;
   }
 }
 
 /**
- * Sincroniza la creación de un Item desde QuickBooks hacia HubSpot.
- * Descarga los detalles de QB y verifica idempotencia en HS antes de crear.
+ * Sincroniza un Item recién creado desde QuickBooks hacia HubSpot.
+ * @param {string|number} qbItemId - ID del Item desde el webhook de QuickBooks.
  */
 async function syncProductFromQuickbooks(qbItemId) {
   try {
-    // 1. Verificar idempotencia para evitar bucles infinitos
+    // 1. Supresión de Eco: Verifica si este webhook fue provocado por el propio sistema
+    if (echoSuppression.wasCreatedInQb(qbItemId)) {
+      console.log(`[Echo Suppression] Item QB ${qbItemId} fue creado por el sistema. Ignorando webhook.`);
+      return qbItemId;
+    }
+
+    // 2. Validación de Idempotencia en base de datos
     const existingHsProduct = await hubspotClient.searchProductByQbId(qbItemId);
     
     if (existingHsProduct) {
-      console.log(`El Item de QB (${qbItemId}) ya existe en HubSpot (ID: ${existingHsProduct.id}). Ignorando webhook para evitar bucle.`);
+      console.log(`Item QB ${qbItemId} ya existe en HubSpot (ID: ${existingHsProduct.id}). Ignorando.`);
       return existingHsProduct.id;
     }
 
-    // 2. Descargar los detalles completos desde QuickBooks
     const qbItem = await quickbooksClient.getItemById(qbItemId);
 
     if (!qbItem) {
@@ -89,7 +100,6 @@ async function syncProductFromQuickbooks(qbItemId) {
       return null;
     }
 
-    // 3. Mapear datos y crear el producto en HubSpot
     const hsProductPayload = {
       name: qbItem.Name,
       price: qbItem.UnitPrice ? qbItem.UnitPrice : 0,
@@ -98,12 +108,16 @@ async function syncProductFromQuickbooks(qbItemId) {
     };
 
     const newHsProduct = await hubspotClient.createProduct(hsProductPayload);
-    console.log(`✅ Producto creado en HubSpot (ID: ${newHsProduct.id}) a partir del Item de QuickBooks (${qbItemId}).`);
+    
+    // 3. Registro en caché: Marca el ID generado en HS para ignorar su posterior webhook
+    echoSuppression.markAsCreatedInHs(newHsProduct.id);
+    
+    console.log(`Producto creado en HubSpot (ID: ${newHsProduct.id}) a partir del Item QB (${qbItemId}).`);
     
     return newHsProduct.id;
 
   } catch (error) {
-    console.error(`Error en la sincronización del Item ${qbItemId} hacia HubSpot:`, error.message);
+    console.error(`Error sincronizando Item ${qbItemId} hacia HubSpot:`, error.message);
     throw error;
   }
 }

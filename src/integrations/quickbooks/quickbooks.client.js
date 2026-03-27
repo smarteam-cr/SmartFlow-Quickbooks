@@ -271,6 +271,34 @@ async function getItemById(itemId) {
   }
 }
 
+/**
+ * Crea una Factura (Invoice) en QuickBooks.
+ * @param {Object} invoicePayload - Objeto formateado según las reglas de Intuit.
+ */
+async function createInvoice(invoicePayload) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/invoice?minorversion=65`;
+
+    const response = await axios.post(url, invoicePayload, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    return response.data.Invoice;
+  } catch (error) {
+    const intuitError = error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error('Error creando Factura en QuickBooks:', intuitError);
+    if (error.response?.data?.Fault) {
+      console.error('Detalles completos del error de QB:', JSON.stringify(error.response.data.Fault, null, 2));
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   getPaymentDetails,
   findCustomerByEmail,
@@ -280,4 +308,5 @@ module.exports = {
   findItemByName,
   createItem,
   getItemById,
+  createInvoice,
 };
