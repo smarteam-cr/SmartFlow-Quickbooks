@@ -14,6 +14,10 @@ async function processContact(contactId) {
     email,
     firstname: firstName,
     lastname: lastName,
+    phone,
+    address,
+    city,
+    country,
   } = contactData.properties;
 
   // Extraemos la propiedad de HubSpot para ver si YA sabíamos el ID
@@ -51,6 +55,10 @@ async function processContact(contactId) {
         email,
         firstName,
         lastName,
+        phone,
+        address,
+        city,
+        country,
       });
       qbCustomerId = newQbCustomer.Id;
       console.log(`¡Cliente CREADO EXITOSAMENTE en QuickBooks! ID: ${qbCustomerId}`);

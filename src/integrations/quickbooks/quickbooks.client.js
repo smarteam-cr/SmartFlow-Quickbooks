@@ -114,9 +114,22 @@ async function createCustomer(customerData) {
       payload.CompanyName = customerData.companyName;
     }
 
-    // Email (si existe)
+    // Email si existe
     if (customerData.email) {
       payload.PrimaryEmailAddr = { Address: customerData.email };
+    }
+
+    // Telefono si existe
+    if (customerData.phone) {
+      payload.PrimaryPhone = { FreeFormNumber: customerData.phone };
+    }
+
+    // Direccion si existe
+    if (customerData.address || customerData.city || customerData.country) {
+      payload.BillAddr = {};
+      if (customerData.address) payload.BillAddr.Line1 = customerData.address;
+      if (customerData.city) payload.BillAddr.City = customerData.city;
+      if (customerData.country) payload.BillAddr.Country = customerData.country;
     }
 
     // ParentRef (para sub-customers hijos)
