@@ -3,19 +3,25 @@ const axios = require("axios");
 
 const BASE_URL = config.quickbooks.baseUrl;
 
-async function getPaymentDetails(realmId, paymentId, accessToken) {
-  const url = `${BASE_URL}/${realmId}/payment/${paymentId}`;
+/**
+ * Obtiene los detalles de un pago en QuickBooks.
+ * Útil para saber qué cantidad se pagó y a qué factura pertenece.
+ */
+async function getPaymentDetails(paymentId) {
   try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/payment/${paymentId}?minorversion=65`;
+    
     const response = await axios.get(url, {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
         Accept: "application/json",
       },
     });
-    return response.data;
+    return response.data.Payment; // Importante: retornar .Payment para acceder directo a los datos
   } catch (error) {
     throw new Error(
-      `Error en API QuickBooks: ${error.response ? JSON.stringify(error.response.data) : error.message}`,
+      `Error obteniendo detalles del pago ${paymentId} en API QuickBooks: ${error.response ? JSON.stringify(error.response.data) : error.message}`
     );
   }
 }
@@ -299,6 +305,31 @@ async function createInvoice(invoicePayload) {
   }
 }
 
+/**
+ * Obtiene los detalles completos de una Factura (Invoice) en QuickBooks usando su ID.
+ * Vital para los pagos: nos permite ver el "TotalAmt" y el "Balance" (Saldo pendiente) real.
+ * @param {string} invoiceId - El ID interno de la factura en QuickBooks.
+ */
+async function getInvoice(invoiceId) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    // Hacemos un GET directo al recurso Invoice
+    const url = `${config.quickbooks.baseUrl}/${realmId}/invoice/${invoiceId}?minorversion=65`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    return response.data.Invoice;
+  } catch (error) {
+    console.error(`Error obteniendo la Factura ${invoiceId} en QuickBooks:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getPaymentDetails,
   findCustomerByEmail,
@@ -309,4 +340,5 @@ module.exports = {
   createItem,
   getItemById,
   createInvoice,
+  getInvoice,
 };

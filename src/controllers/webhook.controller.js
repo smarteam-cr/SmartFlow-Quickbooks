@@ -3,17 +3,46 @@ const contactSyncService = require('../services/contact.sync.service');
 const companySyncService = require('../services/company.sync.service');
 const productSyncService = require('../services/product.sync.service');
 const invoiceSyncService = require('../services/invoice.sync.service');
+const paymentSyncService = require('../services/payment.sync.service');
 
 async function handleQuickBooksWebhook(request, reply) {
   try {
-    console.log('[Controller] Webhook de QuickBooks recibido');
+    console.log('\n======================================================');
+    console.log('🔔 WEBHOOK RECIBIDO DESDE QUICKBOOKS');
+    console.log('======================================================\n');
+    
     const payload = request.body;
-    webhookService.processPaymentNotification(payload).catch(err => {
-      console.error('Error en el proceso en segundo plano:', err.message);
-    });
-    return reply.status(200).send('Webhook recibido y en proceso');
+
+    // QuickBooks envía un arreglo de notificaciones (eventNotifications)
+    if (payload.eventNotifications && payload.eventNotifications.length > 0) {
+      for (const notification of payload.eventNotifications) {
+        
+        // Cada notificación trae entidades que fueron creadas o actualizadas
+        const entities = notification.dataChangeEvent.entities;
+        
+        for (const entity of entities) {
+          // Evaluamos si la entidad es un Pago (Payment) y si es nuevo o actualizado
+          if (entity.name === 'Payment' && (entity.operation === 'Create' || entity.operation === 'Update')) {
+            const paymentId = entity.id;
+            console.log(`\n=== [Webhook] Procesando evento de PAGO (QBO) ID: ${paymentId} ===`);
+            
+            // Lo enviamos a nuestro nuevo orquestador de pagos sin el "await" 
+            // para no bloquear la respuesta rápida (200 OK) que exige QuickBooks
+            paymentSyncService.processQuickbooksPayment(paymentId).catch(err => {
+              console.error('Error en el proceso en segundo plano de pagos:', err.message);
+            });
+            console.log('=================================================');
+          }
+          // Aquí en el futuro puedes agregar más "else if" para escuchar Invoice, Customer, etc.
+          // else if (entity.name === 'Invoice') { ... }
+        }
+      }
+    }
+
+    // Retornamos 200 INMEDIATAMENTE para que Intuit no nos marque timeout
+    return reply.status(200).send('Webhook de QuickBooks recibido y enrutado');
   } catch (error) {
-    console.error('Error en el controlador:', error);
+    console.error('Error en el controlador de QuickBooks:', error);
     return reply.status(500).send('Error interno del servidor');
   }
 }
@@ -55,6 +84,7 @@ const handleHubSpotWebhook = async (request, reply) => {
           console.error('Fallo en el proceso de fondo de la factura:', err.message);
         });
       }
+
     }
 
     return reply.code(200).send({ status: 'success' });

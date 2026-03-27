@@ -733,6 +733,85 @@ async function getLineItemsDetails(lineItemIds) {
   }
 }
 
+/**
+ * Busca una factura en HubSpot utilizando una propiedad personalizada (ej. id_factura_quickbooks).
+ * Vital para encontrar a qué factura pertenece un pago entrante.
+ * @param {string} propertyName - Nombre interno de la propiedad en HubSpot.
+ * @param {string} value - Valor a buscar (El ID de la factura en QuickBooks).
+ */
+async function searchInvoiceByCustomProperty(propertyName, value) {
+  try {
+    const payload = {
+      filterGroups: [
+        {
+          filters: [
+            {
+              propertyName: propertyName,
+              operator: "EQ",
+              value: value.toString(),
+            },
+          ],
+        },
+      ],
+    };
+
+    const response = await axios.post(
+      "https://api.hubapi.com/crm/v3/objects/invoices/search",
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.total > 0) {
+      return response.data.results[0]; // Retorna la factura encontrada
+    }
+    return null;
+  } catch (error) {
+    console.error(
+      `Error buscando factura en HubSpot con ${propertyName} = ${value}:`,
+      error.response?.data || error.message
+    );
+    throw error;
+  }
+}
+
+/**
+ * Actualiza múltiples propiedades de una factura en HubSpot.
+ * Se usará para inyectar el hs_amount_paid y cambiar el estado de la factura a Pagado.
+ * @param {string} invoiceId - ID de la factura en HubSpot.
+ * @param {object} propertiesToUpdate - Objeto llave:valor con las propiedades a actualizar.
+ */
+async function updateInvoice(invoiceId, propertiesToUpdate) {
+  try {
+    const payload = {
+      properties: propertiesToUpdate,
+    };
+
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error(
+      `Error actualizando propiedades (pagos) en la factura ${invoiceId}:`,
+      error.response?.data || error.message
+    );
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -757,4 +836,6 @@ module.exports = {
   getInvoiceAssociations,
   updateInvoiceProperty,
   getLineItemsDetails,
+  searchInvoiceByCustomProperty,
+  updateInvoice,
 };
