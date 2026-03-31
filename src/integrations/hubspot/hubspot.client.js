@@ -5,7 +5,7 @@ async function getContactDetails(contactId) {
   try {
     // Le decimos a HubSpot qué propiedades específicas queremos que nos devuelva.
     // Como mínimo necesitamos el email para buscar en QuickBooks.
-    const properties = "email,firstname,lastname,company,phone,address,city,country";
+    const properties = "email,firstname,lastname,company,phone,address,city,state,zip,country";
 
     const response = await axios.get(
       `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=${properties}`,

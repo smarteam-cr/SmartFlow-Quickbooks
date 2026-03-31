@@ -18,8 +18,8 @@ const mapLineItemToQb = (hsItem, qbItemId) => {
   };
 };
 
-const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines) => {
-  return {
+const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo) => {
+  const payload = {
     CustomerRef: { value: qbCustomerId.toString() },
     Line: qbInvoiceLines,
     TxnDate: formatToQbDate(hsInvoice.properties.hs_invoice_date),
@@ -28,6 +28,21 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines) => {
       value: hsInvoice.properties.hs_title || `Factura exportada desde HubSpot`
     }
   };
+
+  if (contactInfo) {
+    const { displayName, address, city, state, zip, country } = contactInfo;
+    
+    // Concatenamos la dirección con todos los datos disponibles
+    const addressParts = [address, city, state, zip, country].filter(part => !!part);
+    const fullAddress = addressParts.join(', ');
+
+    payload.BillAddr = {
+      Line1: displayName,
+      Line2: fullAddress
+    };
+  }
+
+  return payload;
 };
 
 module.exports = { mapLineItemToQb, mapInvoicePayload };

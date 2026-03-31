@@ -17,6 +17,8 @@ async function processContact(contactId) {
     phone,
     address,
     city,
+    state,
+    zip,
     country,
   } = contactData.properties;
 
@@ -75,9 +77,18 @@ async function processContact(contactId) {
     console.log(`El contacto en HubSpot ya tenía su ID anclado. Omitiendo actualización redundante.`);
   }
 
+  const contactInfo = {
+    displayName: (qbCustomerByEmail ? qbCustomerByEmail.DisplayName : finalDisplayName) || `${firstName || ""} ${lastName || ""}`.trim(),
+    address,
+    city,
+    state,
+    zip,
+    country
+  };
+
   // --- LA LÍNEA MÁGICA ---
   // Devolvemos el número final al Orquestador de Facturas
-  return qbCustomerId;
+  return { qbCustomerId, contactInfo };
 }
 
 module.exports = { processContact };

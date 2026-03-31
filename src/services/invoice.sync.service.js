@@ -26,7 +26,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     console.log(`👤 Procesando Contacto Asociado (ID: ${contactId})...`);
     
     // Invocamos tu servicio existente.
-    const qbCustomerId = await contactSyncService.processContact(contactId);
+    const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId);
     if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
 
     // 3. Obtener y validar los Productos (Line Items)
@@ -72,7 +72,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     }
 
     // 🌟 USAMOS EL MAPPER PARA ARMAR EL PAYLOAD FINAL DE LA FACTURA
-    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines);
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
 
     // Lógica para inyectar la regla global de impuestos si es necesario
     if (facturaLlevaImpuestos) {
@@ -94,6 +94,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     // 6. Guardar los anclas (IDs) en HubSpot
     const propiedadesParaActualizar = {
         id_factura_quickbooks: qbInvoiceId.toString(),
+        sistema_de_origen: "QuickBooks",
         numero_factura_qb: qbDocNumber 
     };
 

@@ -62,12 +62,11 @@ async function processDealWebhook(dealId) {
 
       console.log(`   ${index + 1}. Producto: ${item.properties.name} | Precio: $${item.properties.price} | Cantidad: ${item.properties.quantity} | ¿Lleva Impuesto?: ${esGravable}`);
     });
-
-    // --- NUEVO CÓDIGO AÑADIDO: EL WORKAROUND ---
+-
     console.log(`\n[Workaround] Disparando sincronización de factura simulada...`);
 
     // TODO: CAMBIAR ESTE ID EN CADA PRUEBA CLONANDO LA FACTURA EN HUBSPOT
-    const idFacturaDePrueba = '543853371921';
+    const idFacturaDePrueba = '544155389227';
 
     // Llamamos al servicio de facturas sin bloquear el flujo (Background)
     invoiceSyncService.syncInvoiceToQuickbooks(idFacturaDePrueba).catch(err => {
