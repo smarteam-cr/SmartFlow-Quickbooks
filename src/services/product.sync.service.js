@@ -104,7 +104,9 @@ async function syncProductFromQuickbooks(qbItemId) {
       name: qbItem.Name,
       price: qbItem.UnitPrice ? qbItem.UnitPrice : 0,
       description: qbItem.Description || "",
-      qbId: qbItemId
+      hs_sku: qbItem.Sku || "",
+      qbId: qbItemId,
+      isTaxable: qbItem.Taxable,
     };
 
     const newHsProduct = await hubspotClient.createProduct(hsProductPayload);

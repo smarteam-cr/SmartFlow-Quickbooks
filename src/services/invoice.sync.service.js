@@ -1,13 +1,8 @@
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
-const contactSyncService = require('./contact.sync.service'); // Reutilizamos tu lógica de contactos
-const productSyncService = require('./product.sync.service'); // Reutilizamos tu lógica de productos
+const contactSyncService = require('./contact.sync.service');
+const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
 
-/**
- * Orquesta la creación de una factura desde HubSpot hacia QuickBooks.
- * Garantiza la existencia del Cliente y los Productos antes de facturar.
- * @param {string} invoiceId - El ID de la factura de HubSpot.
- */
 async function syncInvoiceToQuickbooks(invoiceId) {
   try {
     console.log(`\n=== 🚀 INICIANDO SINCRONIZACIÓN DE FACTURA: ${invoiceId} ===`);
@@ -30,7 +25,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     const contactId = contactAssociations[0];
     console.log(`👤 Procesando Contacto Asociado (ID: ${contactId})...`);
     
-    // Invocamos tu servicio existente. Si no existe en QB, lo crea y devuelve el ID. Si existe, solo devuelve el ID.
+    // Invocamos tu servicio existente.
     const qbCustomerId = await contactSyncService.processContact(contactId);
     if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
 
@@ -43,8 +38,8 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     console.log(`📦 Procesando ${lineItemAssociations.length} Productos (Line Items)...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
     
-    // Arreglo donde guardaremos las líneas de la factura para QuickBooks
     const qbInvoiceLines = [];
+    let facturaLlevaImpuestos = false; 
 
     for (const item of lineItemsData) {
       let qbItemId = item.properties.id_producto_quickbooks;
@@ -52,13 +47,10 @@ async function syncInvoiceToQuickbooks(invoiceId) {
       // Si el producto no tiene ID de QB, lo sincronizamos "al vuelo"
       if (!qbItemId) {
         console.log(`   ⚠️ El producto "${item.properties.name}" no está en QuickBooks. Creándolo al vuelo...`);
-        // Ojo: Para usar el syncProductToQuickbooks necesitamos el ID del Producto base, no del Line Item.
-        // Pero como atajo de PoC, si no tenemos el ID del producto base, lo buscamos por nombre en QB
         const existingQbItem = await quickbooksClient.findItemByName(item.properties.name);
         if (existingQbItem) {
           qbItemId = existingQbItem.Id;
         } else {
-          // Lo creamos directamente
           const newItem = await quickbooksClient.createItem({
             Name: item.properties.name,
             Type: "Service",
@@ -69,45 +61,49 @@ async function syncInvoiceToQuickbooks(invoiceId) {
         }
       }
 
-      const price = Number(item.properties.price || 0);
-      const qty = Number(item.properties.quantity || 1);
+      // Detectamos si la línea requiere impuestos
+      if (item.properties.es_gravable === "true") {
+        facturaLlevaImpuestos = true;
+      }
 
-      // Estructura estricta de una línea de factura en QuickBooks
-      qbInvoiceLines.push({
-        Amount: price * qty,
-        DetailType: "SalesItemLineDetail",
-        SalesItemLineDetail: {
-          ItemRef: { value: qbItemId.toString() },
-          UnitPrice: price,
-          Qty: qty
-        }
-      });
+      // 🌟 USAMOS EL MAPPER PARA TRADUCIR LA LÍNEA
+      const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
+      qbInvoiceLines.push(mappedLine);
     }
 
-    // 4. Armar el Payload Final de la Factura
-    const qbInvoicePayload = {
-      CustomerRef: {
-        value: qbCustomerId.toString()
-      },
-      Line: qbInvoiceLines,
-      // Opcional: Podemos poner el nombre de la factura de HubSpot como nota
-      CustomerMemo: {
-        value: hsInvoice.properties.hs_title || `Factura exportada desde HubSpot (${invoiceId})`
-      }
-    };
+    // 🌟 USAMOS EL MAPPER PARA ARMAR EL PAYLOAD FINAL DE LA FACTURA
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines);
+
+    // Lógica para inyectar la regla global de impuestos si es necesario
+    if (facturaLlevaImpuestos) {
+      // ⚠️ AQUÍ INYECTAREMOS EL ID DEL IMPUESTO MÁS ADELANTE
+      console.log('Se detectaron productos gravables. (Pendiente inyectar TxnTaxDetail)');
+    }
 
     console.log(`📝 Enviando Factura a QuickBooks por un total de $${hsInvoice.properties.hs_invoice_total || 'N/A'}...`);
     
     // 5. Crear la factura en QuickBooks
     const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);
     
-    // 6. Guardar el ancla en HubSpot
-    await hubspotClient.updateInvoiceProperty(invoiceId, newQbInvoice.Id);
+    // Extraemos el ID numérico y el número de factura visible (DocNumber) que asignó QuickBooks
+    const qbInvoiceId = newQbInvoice.Id;
+    const qbDocNumber = newQbInvoice.DocNumber; 
     
-    console.log(`🎉 ¡ÉXITO! Factura sincronizada. ID en QuickBooks: ${newQbInvoice.Id}`);
+    console.log(`✅ Factura creada en QB. ID Interno: ${qbInvoiceId} | Número: ${qbDocNumber}`);
+
+    // 6. Guardar los anclas (IDs) en HubSpot
+    const propiedadesParaActualizar = {
+        id_factura_quickbooks: qbInvoiceId.toString(),
+        numero_factura_qb: qbDocNumber 
+    };
+
+    console.log(`🔗 Enlazando el Número de Factura (${qbDocNumber}) a HubSpot...`);
+    await hubspotClient.updateInvoice(invoiceId, propiedadesParaActualizar);
+    
+    console.log(`🎉 ¡ÉXITO! Factura sincronizada y enlazada correctamente.`);
     console.log(`=========================================================\n`);
 
-    return newQbInvoice.Id;
+    return qbInvoiceId;
 
   } catch (error) {
     console.error(`❌ Error en la sincronización de la factura ${invoiceId}:`, error.message);
@@ -115,6 +111,4 @@ async function syncInvoiceToQuickbooks(invoiceId) {
   }
 }
 
-module.exports = {
-  syncInvoiceToQuickbooks
-};
+module.exports = { syncInvoiceToQuickbooks };

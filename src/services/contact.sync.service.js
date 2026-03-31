@@ -33,36 +33,38 @@ async function processContact(contactId) {
   // 2. Lógica de Búsqueda Robusta y Creación
   let qbCustomerId = null;
 
-  // A. Buscar por Correo
+  // A. Buscar por Correo (Es el identificador real)
   const qbCustomerByEmail = await quickbooksClient.findCustomerByEmail(email);
 
   if (qbCustomerByEmail) {
     qbCustomerId = qbCustomerByEmail.Id;
     console.log(`¡Cliente ENCONTRADO en QuickBooks por email! Su ID es: ${qbCustomerId}`);
   } else {
-    // B. Escudo anti Error 400: Buscar por Nombre Exacto (DisplayName)
-    const displayName = `${firstName || ""} ${lastName || ""}`.trim();
-    console.log(`El correo no existe en QB. Buscando por nombre exacto: "${displayName}"...`);
-    const qbCustomerByName = await quickbooksClient.findCustomerByDisplayName(displayName);
+    // B. Escudo anti Error 400 (DisplayName debe ser único en QB)
+    // Como el correo no se encontró, es un contacto NUEVO. 
+    // Pero debemos validar si su nombre ya lo está usando otra persona.
+    const baseDisplayName = `${firstName || ""} ${lastName || ""}`.trim();
+    let finalDisplayName = baseDisplayName;
+
+    console.log(`El correo no existe en QB. Verificando disponibilidad del nombre: "${baseDisplayName}"...`);
+    const qbCustomerByName = await quickbooksClient.findCustomerByDisplayName(baseDisplayName);
 
     if (qbCustomerByName) {
-      qbCustomerId = qbCustomerByName.Id;
-      console.log(`¡Cliente ENCONTRADO en QuickBooks por nombre! Su ID es: ${qbCustomerId}`);
-    } else {
-      // C. Crearlo si de verdad no existe
-      console.log(`El cliente NO existe en QuickBooks. Procediendo a crearlo...`);
-      const newQbCustomer = await quickbooksClient.createCustomer({
-        email,
-        firstName,
-        lastName,
-        phone,
-        address,
-        city,
-        country,
-      });
-      qbCustomerId = newQbCustomer.Id;
-      console.log(`¡Cliente CREADO EXITOSAMENTE en QuickBooks! ID: ${qbCustomerId}`);
+      // ¡El nombre ya existe! Le concatenamos el email para que sea único en QB
+      finalDisplayName = `${baseDisplayName} (${email})`;
+      console.log(`⚠️ El nombre ya está en uso. Modificando DisplayName a: "${finalDisplayName}"`);
     }
+
+    // C. Crearlo como un cliente totalmente nuevo
+    console.log(`Procediendo a crear el NUEVO cliente en QuickBooks...`);
+    const newQbCustomer = await quickbooksClient.createCustomer({
+      email,
+      firstName,
+      lastName,
+      displayName: finalDisplayName // Pasamos el nombre único con o sin el correo
+    });
+    qbCustomerId = newQbCustomer.Id;
+    console.log(`¡Cliente CREADO EXITOSAMENTE en QuickBooks! ID: ${qbCustomerId}`);
   }
 
   // 3. Optimización: Solo actualizamos HubSpot si no tenía el ID

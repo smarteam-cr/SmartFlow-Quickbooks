@@ -457,7 +457,7 @@ async function getLineItemsByDealId(dealId) {
     // 2. Obtener los detalles reales de esos productos (nombre, precio, cantidad)
     const batchPayload = {
       inputs: lineItemIds,
-      properties: ["name", "price", "quantity", "hs_sku"],
+      properties: ["name", "price", "quantity", "hs_sku", "description","es_gravable"],
     };
 
     const detailsResponse = await axios.post(
@@ -556,7 +556,9 @@ async function createProduct(productData) {
         name: productData.name,
         price: productData.price ? productData.price.toString() : "0",
         description: productData.description || "",
-        id_producto_quickbooks: productData.qbId.toString() // Guardamos el ancla inmediatamente
+        hs_sku: productData.hs_sku || "",
+        es_gravable: productData.isTaxable ? "true" : "false",
+        id_producto_quickbooks: productData.qbId.toString()
       }
     };
 
@@ -621,7 +623,7 @@ async function searchProductByQbId(qbId) {
 async function getInvoiceDetails(invoiceId) {
   try {
     // Propiedades: monto total, estado, y nuestra propiedad personalizada
-    const properties = "hs_invoice_total,hs_status,hs_title,id_factura_quickbooks";
+    const properties = "hs_invoice_total,hs_status,hs_title,id_factura_quickbooks,hs_invoice_date,hs_due_date";
     
     const response = await axios.get(
       `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`,
@@ -712,7 +714,7 @@ async function getLineItemsDetails(lineItemIds) {
     const batchPayload = {
       inputs: lineItemIds.map(id => ({ id })),
       // Pedimos las propiedades vitales, incluyendo nuestra ancla de QuickBooks
-      properties: ["name", "price", "quantity", "hs_sku", "id_producto_quickbooks"]
+      properties: ["name", "price", "quantity", "hs_sku", "description", "id_producto_quickbooks", "es_gravable"]
     };
 
     const response = await axios.post(

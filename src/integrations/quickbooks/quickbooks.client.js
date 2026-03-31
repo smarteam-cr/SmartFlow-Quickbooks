@@ -85,7 +85,11 @@ async function createCustomer(customerData) {
 
     // Armamos el DisplayName según el tipo de registro
     let displayName;
-    if (isCompany) {
+
+    // Si nos pasan un displayName explícito, lo usamos por encima de todo
+    if (customerData.displayName) {
+      displayName = customerData.displayName;
+    } else if (isCompany) {
       // Empresa pura: solo el nombre de la empresa
       displayName = customerData.companyName;
     } else if (customerData.parentRef && customerData.companyName) {
