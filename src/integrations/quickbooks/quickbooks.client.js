@@ -347,6 +347,125 @@ async function getInvoice(invoiceId) {
   }
 }
 
+/**
+ * Obtiene un Customer por su ID.
+ * Útil para obtener el SyncToken antes de una actualización.
+ */
+async function getCustomerById(customerId) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/customer/${customerId}?minorversion=65`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+      },
+    });
+
+    return response.data.Customer;
+  } catch (error) {
+    console.error(`Error obteniendo Customer ${customerId} en QuickBooks:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza un Customer en QuickBooks.
+ * Requiere el SyncToken actual del objeto.
+ * 
+ * @param {string} qbCustomerId - ID del cliente en QB.
+ * @param {string} syncToken - SyncToken actual del registro.
+ * @param {Object} customerData - Nuevos datos (mismo formato que createCustomer).
+ */
+async function updateCustomer(qbCustomerId, syncToken, customerData) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/customer?minorversion=65`;
+
+    const isCompany =
+      customerData.companyName &&
+      !customerData.firstName &&
+      !customerData.lastName;
+
+    let displayName;
+    if (customerData.displayName) {
+      displayName = customerData.displayName;
+    } else if (isCompany) {
+      displayName = customerData.companyName;
+    } else if (customerData.parentRef && customerData.companyName) {
+      const fullName = `${customerData.firstName || ""} ${customerData.lastName || ""}`.trim();
+      displayName = `${fullName} (${customerData.companyName})`;
+    } else {
+      displayName = `${customerData.firstName || ""} ${customerData.lastName || ""}`.trim();
+    }
+
+    // 1. CORRECCIÓN CLAVE: sparse en minúscula e Id/SyncToken como Strings
+    const payload = {
+      Id: String(qbCustomerId),
+      SyncToken: String(syncToken),
+      sparse: true 
+    };
+
+    // Solo añadimos DisplayName si realmente tiene un valor válido
+    if (displayName) {
+      payload.DisplayName = displayName;
+    }
+
+    // 2. CORRECCIÓN CLAVE: No enviar cadenas vacías ("")
+    if (!isCompany) {
+      if (customerData.firstName) payload.GivenName = customerData.firstName;
+      if (customerData.lastName) payload.FamilyName = customerData.lastName;
+    }
+
+    if (customerData.companyName) {
+      payload.CompanyName = customerData.companyName;
+    }
+
+    if (customerData.email) {
+      payload.PrimaryEmailAddr = { Address: customerData.email };
+    }
+
+    if (customerData.phone) {
+      payload.PrimaryPhone = { FreeFormNumber: customerData.phone };
+    }
+
+    // Aseguramos que los campos de dirección coincidan con los que le dimos a HubSpot
+    if (customerData.address || customerData.city || customerData.country || customerData.state || customerData.zip) {
+      payload.BillAddr = {};
+      if (customerData.address) payload.BillAddr.Line1 = customerData.address;
+      if (customerData.city)    payload.BillAddr.City = customerData.city;
+      if (customerData.country) payload.BillAddr.Country = customerData.country;
+      if (customerData.state)   payload.BillAddr.CountrySubDivisionCode = customerData.state;
+      if (customerData.zip)     payload.BillAddr.PostalCode = customerData.zip;
+    }
+
+    if (customerData.parentRef) {
+      payload.ParentRef = { value: String(customerData.parentRef) };
+      payload.Job = true;
+    } else {
+      payload.Job = false;
+    }
+
+    // console.log("Payload a enviar a QB:", JSON.stringify(payload, null, 2)); // Descomenta si vuelve a fallar para ver el JSON exacto
+
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    return response.data.Customer;
+  } catch (error) {
+    const intuitError = error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error(`Error actualizando cliente ${qbCustomerId} en QuickBooks:`, intuitError);
+    // Si tienes descomentado el console.log de arriba, sabremos exactamente qué línea provocó esto.
+    throw error;
+  }
+}
+
 module.exports = {
   getPaymentDetails,
   findCustomerByEmail,
@@ -358,4 +477,6 @@ module.exports = {
   getItemById,
   createInvoice,
   getInvoice,
+  getCustomerById,
+  updateCustomer,
 };

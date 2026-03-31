@@ -4,24 +4,26 @@ const companySyncService = require('../services/company.sync.service');
 const productSyncService = require('../services/product.sync.service');
 const invoiceSyncService = require('../services/invoice.sync.service');
 const paymentSyncService = require('../services/payment.sync.service');
+const echoSuppression = require('../utils/echo.suppression.util');
+const mutex = require('../utils/mutex.util');
 
 async function handleQuickBooksWebhook(request, reply) {
   try {
     console.log('\n======================================================');
     console.log('🔔 WEBHOOK RECIBIDO DESDE QUICKBOOKS');
     console.log('======================================================\n');
-    
+
     const payload = request.body;
 
     if (payload.eventNotifications && payload.eventNotifications.length > 0) {
       for (const notification of payload.eventNotifications) {
         const entities = notification.dataChangeEvent.entities;
-        
+
         for (const entity of entities) {
           if (entity.name === 'Payment' && (entity.operation === 'Create' || entity.operation === 'Update')) {
             const paymentId = entity.id;
             console.log(`\n=== [Webhook] Procesando evento de PAGO (QBO) ID: ${paymentId} ===`);
-            
+
             paymentSyncService.processQuickbooksPayment(paymentId).catch(err => {
               console.error('Error en el proceso en segundo plano de pagos:', err.message);
             });
@@ -30,9 +32,9 @@ async function handleQuickBooksWebhook(request, reply) {
           else if (entity.name === 'Item' && (entity.operation === 'Create' || entity.operation === 'Update')) {
             const itemId = entity.id;
             console.log(`\n=== [Webhook] Procesando evento de PRODUCTO/ITEM (QBO) ID: ${itemId} ===`);
-            
+
             productSyncService.syncProductFromQuickbooks(itemId).catch(err => {
-                console.error('Error en el proceso en segundo plano de productos:', err.message);
+              console.error('Error en el proceso en segundo plano de productos:', err.message);
             });
             console.log('=================================================');
           }
@@ -50,40 +52,49 @@ async function handleQuickBooksWebhook(request, reply) {
 const handleHubSpotWebhook = async (request, reply) => {
   try {
     const events = request.body;
-    
-    console.log('\n======================================================');
-    console.log('🔔 WEBHOOK RECIBIDO DESDE HUBSPOT');
-    console.log(JSON.stringify(events, null, 2));
-    console.log('======================================================\n');
 
     for (const event of events) {
-      if (event.subscriptionType === 'contact.creation') {
-        const contactId = event.objectId;
-        console.log(`\n=== [Webhook] Procesando nuevo CONTACTO ID: ${contactId} ===`);
-        await contactSyncService.processContact(contactId);
-      } 
-      else if (event.subscriptionType === 'company.creation') {
-        const companyId = event.objectId;
-        console.log(`\n=== [Webhook] Procesando nueva EMPRESA ID: ${companyId} ===`);
-        await companySyncService.processCompany(companyId);
-      }
-      else if (event.subscriptionType === 'product.creation') {
-        const productId = event.objectId;
-        console.log(`\n=== [Webhook] Procesando nuevo PRODUCTO ID: ${productId} ===`);
-        await productSyncService.syncProductToQuickbooks(productId);
-      }
-      else if (event.subscriptionType === 'deal.creation') {
-        const dealId = event.objectId;
-        console.log(`\n=== [Webhook] Procesando nuevo NEGOCIO ID: ${dealId} ===`);
-        webhookService.processDealWebhook(dealId).catch(err => {
-          console.error('Fallo en el proceso de fondo del negocio:', err.message);
-        });
+      try {
+        // 🌟 CLAVE: Si es asociación usa fromObjectId, si no usa objectId
+        const targetId = event.fromObjectId || event.objectId;
+
+        if (!targetId) {
+          console.warn(`⚠️ Evento ${event.subscriptionType} ignorado por falta de ID.`);
+          continue;
+        }
+
+        if (
+          event.subscriptionType === 'contact.creation' ||
+          event.subscriptionType === 'contact.propertyChange' ||
+          event.subscriptionType === 'contact.associationChange'
+        ) {
+
+          // 1. SUPRESIÓN DE ECO (Ahora targetId es seguro)
+          if (echoSuppression.wasCreatedInHs(targetId)) {
+            console.log(`♻️ [Echo] Ignorando contacto ${targetId} (cambio interno).`);
+            continue;
+          }
+
+          // 2. FILTRO DE PROPIEDADES (Solo para cambios de valor)
+          if (event.subscriptionType === 'contact.propertyChange') {
+            const mappedProps = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country'];
+            if (!mappedProps.includes(event.propertyName)) continue;
+          }
+
+          // 3. PROCESAMIENTO
+          console.log(`⏱️ Encolando Sincronización para Contacto ${targetId} (${event.subscriptionType})...`);
+
+          contactSyncService.processContact(targetId).catch(err => {
+            console.error(`❌ Error sincronizando contacto ${targetId}:`, err.message);
+          });
+        }
+      } catch (err) {
+        console.error(`❌ Error en evento individual:`, err.message);
       }
     }
-
     return reply.code(200).send({ status: 'success' });
   } catch (error) {
-    console.error('Error al procesar el webhook de HubSpot:', error);
+    console.error('💥 Error crítico en controlador:', error);
     return reply.code(500).send({ status: 'error' });
   }
 };
@@ -91,7 +102,7 @@ const handleHubSpotWebhook = async (request, reply) => {
 async function handleHubspotDealWebhook(request, reply) {
   try {
     const { dealId } = request.body;
-    
+
     if (!dealId) {
       return reply.status(400).send({ error: 'Falta proveer el dealId en el body' });
     }

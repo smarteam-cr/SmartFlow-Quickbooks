@@ -5,7 +5,7 @@ async function getContactDetails(contactId) {
   try {
     // Le decimos a HubSpot qué propiedades específicas queremos que nos devuelva.
     // Como mínimo necesitamos el email para buscar en QuickBooks.
-    const properties = "email,firstname,lastname,company,phone,address,city,state,zip,country";
+    const properties = "email,firstname,lastname,company,phone,address,city,state,zip,country,id_usuario_quickbooks";
 
     const response = await axios.get(
       `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=${properties}`,
@@ -814,6 +814,33 @@ async function updateInvoice(invoiceId, propertiesToUpdate) {
   }
 }
 
+/**
+ * Obtiene los IDs de las empresas asociadas a un contacto.
+ * @param {string} contactId - ID del contacto en HubSpot.
+ */
+async function getContactAssociatedCompanyIds(contactId) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}/associations/companies`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    
+    // Retornamos un arreglo plano con los IDs de las empresas
+    return response.data.results.map((assoc) => assoc.id);
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return [];
+    }
+    console.error(`Error obteniendo asociaciones de empresas para el contacto ${contactId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -840,4 +867,5 @@ module.exports = {
   getLineItemsDetails,
   searchInvoiceByCustomProperty,
   updateInvoice,
+  getContactAssociatedCompanyIds,
 };

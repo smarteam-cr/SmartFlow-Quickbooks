@@ -35,12 +35,16 @@ function markAsCreatedInHs(hsId) {
 }
 
 function wasCreatedInHs(hsId) {
+    // Si hsId es undefined o null, devolvemos false directamente
+    if (!hsId) return false;
     return recentlyCreatedInHs.has(hsId.toString());
 }
+
 
 module.exports = {
     markAsCreatedInQb,
     wasCreatedInQb,
     markAsCreatedInHs,
-    wasCreatedInHs
+    wasCreatedInHs,
+
 };
