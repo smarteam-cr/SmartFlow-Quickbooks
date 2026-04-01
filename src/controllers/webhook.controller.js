@@ -13,6 +13,7 @@ async function handleQuickBooksWebhook(request, reply) {
     console.log('🔔 WEBHOOK RECIBIDO DESDE QUICKBOOKS');
     console.log('======================================================\n');
 
+
     const payload = request.body;
 
     if (payload.eventNotifications && payload.eventNotifications.length > 0) {
@@ -20,6 +21,7 @@ async function handleQuickBooksWebhook(request, reply) {
         const entities = notification.dataChangeEvent.entities;
 
         for (const entity of entities) {
+          console.log(entity.operation);          
           if (entity.name === 'Payment' && (entity.operation === 'Create' || entity.operation === 'Update')) {
             const paymentId = entity.id;
             console.log(`\n=== [Webhook] Procesando evento de PAGO (QBO) ID: ${paymentId} ===`);
@@ -35,6 +37,15 @@ async function handleQuickBooksWebhook(request, reply) {
 
             productSyncService.syncProductFromQuickbooks(itemId).catch(err => {
               console.error('Error en el proceso en segundo plano de productos:', err.message);
+            });
+            console.log('=================================================');
+          }
+          else if (entity.name === 'Invoice' && (entity.operation === 'Create' || entity.operation === 'Update' || entity.operation === 'Emailed')) {
+            const invoiceId = entity.id;
+            console.log(`\n=== [Webhook] Procesando evento de FACTURA (QBO) ID: ${invoiceId} ===`);
+            
+            invoiceSyncService.syncInvoiceFromQuickbooks(invoiceId).catch(err => {
+              console.error('Error en el proceso en segundo plano de facturas:', err.message);
             });
             console.log('=================================================');
           }

@@ -60,6 +60,12 @@ async function _internalProcessContact(contactId) {
   // Intentamos localizar por el ID guardado o por email
   if (id_usuario_quickbooks) {
     existingCustomer = await quickbooksClient.getCustomerById(id_usuario_quickbooks).catch(() => null);
+    
+    // 🛡️ AUTO-SANACIÓN: Si el cliente está inactivo (borrado en QB), lo ignoramos para forzar re-creación/vínculo
+    if (existingCustomer && existingCustomer.Active === false) {
+      console.warn(`⚠️ El cliente QB ID ${id_usuario_quickbooks} está inactivo/borrado. Forzando re-sincronización.`);
+      existingCustomer = null;
+    }
   }
 
   if (!existingCustomer) {

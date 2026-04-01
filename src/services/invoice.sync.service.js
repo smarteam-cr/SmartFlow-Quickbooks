@@ -2,6 +2,7 @@ const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const contactSyncService = require('./contact.sync.service');
 const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
+const echoSuppression = require('../utils/echo.suppression.util');
 
 async function syncInvoiceToQuickbooks(invoiceId) {
   try {
@@ -89,13 +90,15 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     const qbInvoiceId = newQbInvoice.Id;
     const qbDocNumber = newQbInvoice.DocNumber; 
     
-    console.log(`✅ Factura creada en QB. ID Interno: ${qbInvoiceId} | Número: ${qbDocNumber}`);
-
-    // 6. Guardar los anclas (IDs) en HubSpot
+    // 🌟 SUPRESIÓN DE ECO: Marcamos para ignorar el webhook inmediato de creación
+    echoSuppression.markAsCreatedInQb(qbInvoiceId);
+    
+    // 6. Guardar el ancla (ID) y el estado inicial sencillo en HubSpot
     const propiedadesParaActualizar = {
         id_factura_quickbooks: qbInvoiceId.toString(),
         sistema_de_origen: "QuickBooks",
-        numero_factura_qb: qbDocNumber 
+        numero_factura_qb: qbDocNumber,
+        estado_de_factura_qb: 'Abierta'
     };
 
     console.log(`🔗 Enlazando el Número de Factura (${qbDocNumber}) a HubSpot...`);
@@ -105,11 +108,71 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     console.log(`=========================================================\n`);
 
     return qbInvoiceId;
-
   } catch (error) {
     console.error(`❌ Error en la sincronización de la factura ${invoiceId}:`, error.message);
     throw error;
   }
 }
 
-module.exports = { syncInvoiceToQuickbooks };
+/**
+ * --- SINCRONIZACIÓN QB -> HS ---
+ * Actualiza los saldos y estados de una factura en HubSpot desde QuickBooks.
+ */
+async function syncInvoiceFromQuickbooks(qbInvoiceId) {
+  try {
+    // 🛡️ SUPRESIÓN DE ECO: Ignorar si es un cambio generado por nosotros
+    if (echoSuppression.wasCreatedInQb(qbInvoiceId)) {
+        console.log(`♻️ [Echo] Ignorando factura ${qbInvoiceId} (cambio interno).`);
+        return;
+    }
+
+    console.log(`\n📄 [QB -> HS] Actualizando info de la Factura de QB: ${qbInvoiceId}`);
+
+    // 1. Obtener los detalles de la factura desde QuickBooks
+    const qbInvoice = await quickbooksClient.getInvoice(qbInvoiceId);
+    if (!qbInvoice) {
+      console.warn(`[Invoice Sync] ⚠️ No se encontró la factura ${qbInvoiceId} en QuickBooks.`);
+      return;
+    }
+
+    // 2. Buscar la factura en HubSpot usando nuestra propiedad ancla
+    const hsInvoice = await hubspotClient.searchInvoiceByCustomProperty('id_factura_quickbooks', qbInvoiceId);
+    if (!hsInvoice) {
+      console.error(`[Invoice Sync] ❌ Error: No se encontró en HubSpot la factura con ID QB: ${qbInvoiceId}`);
+      return;
+    }
+
+    // 3. Evaluar saldos
+    const amountPaid = qbInvoice.TotalAmt - qbInvoice.Balance;
+    const remainingBalance = qbInvoice.Balance;
+
+    // 4. Preparar propiedades
+    const propertiesToUpdate = {
+      importe_pagado_qb: amountPaid.toString(),
+      saldo_pendiente_qb: remainingBalance.toString()
+    };
+
+    // Lógica de estado según saldos y envío por email
+    if (remainingBalance === 0) {
+      propertiesToUpdate.estado_de_factura_qb = 'Pagada';
+    } else if (amountPaid > 0) {
+      propertiesToUpdate.estado_de_factura_qb = 'Pago Parcial';
+    } else if (qbInvoice.EmailStatus === 'EmailSent') {
+      propertiesToUpdate.estado_de_factura_qb = 'Enviada';
+    } else {
+      propertiesToUpdate.estado_de_factura_qb = 'Abierta';
+    }
+
+    // 5. Enviar el PATCH a HubSpot
+    console.log(`[Invoice Sync] Actualizando saldos y estado (${propertiesToUpdate.estado_de_factura_qb}) en HS para la factura ${hsInvoice.id}...`);
+    await hubspotClient.updateInvoice(hsInvoice.id, propertiesToUpdate);
+
+    console.log(`[Invoice Sync] ✅ Éxito: Factura ${hsInvoice.id} actualizada.`);
+
+  } catch (error) {
+    console.error(`[Invoice Sync] ❌ Error sincronizando factura ${qbInvoiceId} hacia HubSpot:`, error.message);
+    throw error;
+  }
+}
+
+module.exports = { syncInvoiceToQuickbooks, syncInvoiceFromQuickbooks };
