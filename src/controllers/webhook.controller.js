@@ -139,6 +139,15 @@ const handleHubSpotWebhook = async (request, reply) => {
             console.error(`❌ Error sincronizando producto ${targetId}:`, err.message);
           });
         }
+        else if (
+          event.subscriptionType === 'deal.creation' ||
+          event.subscriptionType === 'deal.propertyChange'
+        ) {
+          console.log(`⏱️ Encolando Procesamiento para Negocio ${targetId} (${event.subscriptionType})...`);
+          webhookService.processDealWebhook(targetId).catch(err => {
+            console.error(`❌ Error procesando negocio ${targetId}:`, err.message);
+          });
+        }
       } catch (err) {
         console.error(`❌ Error en evento individual:`, err.message);
       }

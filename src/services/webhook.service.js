@@ -62,13 +62,28 @@ async function processDealWebhook(dealId) {
 
       console.log(`   ${index + 1}. Producto: ${item.properties.name} | Precio: $${item.properties.price} | Cantidad: ${item.properties.quantity} | ¿Lleva Impuesto?: ${esGravable}`);
     });
--
+
     console.log(`\n[Workaround] Disparando sincronización de factura simulada...`);
 
     // TODO: CAMBIAR ESTE ID EN CADA PRUEBA CLONANDO LA FACTURA EN HUBSPOT
-    const idFacturaDePrueba = '544155389227';
+    const idFacturaDePrueba = '544541977963';
 
-    // Llamamos al servicio de facturas sin bloquear el flujo (Background)
+    // 1. OBTENER CONTACTOS DE LA FACTURA
+    console.log(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);
+    const associatedContacts = await hubspotClient.getInvoiceAssociations(idFacturaDePrueba, 'contacts');
+    console.log(`[HubSpot] Encontrados ${associatedContacts.length} contactos asociados a la factura.`);
+
+    // 2. ASOCIAR FACTURA AL NEGOCIO (CRM Association)
+    console.log(`[HubSpot] Asociando factura ${idFacturaDePrueba} con el Negocio ${dealId}...`);
+    await hubspotClient.associateInvoiceToDeal(idFacturaDePrueba, dealId);
+
+    // 3. ASOCIAR FACTURA A LOS CONTACTOS (Asegurar vínculo)
+    for (const contactId of associatedContacts) {
+      console.log(`[HubSpot] Asegurando vínculo factura ${idFacturaDePrueba} <-> Contacto ${contactId}...`);
+      await hubspotClient.associateInvoiceToContact(idFacturaDePrueba, contactId);
+    }
+
+    // 3. Sincronizar hacia QuickBooks (Background)
     invoiceSyncService.syncInvoiceToQuickbooks(idFacturaDePrueba).catch(err => {
       console.error(`[Fallo en Segundo Plano] Error sincronizando la factura simulada ${idFacturaDePrueba}:`, err.message);
     });

@@ -930,8 +930,75 @@ async function searchContactByQbId(qbId) {
 }
 
 /**
- * Elimina la asociación entre un contacto y una empresa.
+ * Obtiene los IDs de los contactos asociados a un negocio (Deal).
+ * @param {string} dealId - ID del negocio en HubSpot.
  */
+async function getDealAssociatedContacts(dealId) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/deals/${dealId}/associations/contacts`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    
+    return response.data.results.map((assoc) => assoc.id);
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return [];
+    }
+    console.error(`Error obteniendo asociaciones de contactos para el negocio ${dealId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Asocia una factura a un contacto.
+ */
+async function associateInvoiceToContact(invoiceId, contactId) {
+  try {
+    await axios.put(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/contacts/${contactId}/invoice_to_contact`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return true;
+  } catch (error) {
+    console.error(`Error asociando Factura ${invoiceId} a Contacto ${contactId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Asocia una factura a un negocio (Deal).
+ */
+async function associateInvoiceToDeal(invoiceId, dealId) {
+  try {
+    await axios.put(
+      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/deals/${dealId}/invoice_to_deal`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return true;
+  } catch (error) {
+    console.error(`Error asociando Factura ${invoiceId} a Negocio ${dealId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 async function disassociateContactFromCompany(contactId, companyId) {
   try {
     // Usamos el endpoint de eliminación de asociaciones
@@ -1002,6 +1069,9 @@ module.exports = {
   searchInvoiceByCustomProperty,
   updateInvoice,
   getContactAssociatedCompanyIds,
+  getDealAssociatedContacts,
+  associateInvoiceToContact,
+  associateInvoiceToDeal,
   updateContact,
   updateCompany,
   searchContactByQbId,

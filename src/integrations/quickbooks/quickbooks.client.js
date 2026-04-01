@@ -505,7 +505,7 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     if (customerData.nit) {
         payload.AlternatePhone = { FreeFormNumber: String(customerData.nit) };
     }
-
+ 
     if (customerData.domain) {
         let uri = customerData.domain;
         if (uri && !uri.startsWith('http')) {
@@ -513,9 +513,6 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
         }
         payload.WebAddr = { URI: uri };
     }
-
-
-    // console.log("Payload a enviar a QB:", JSON.stringify(payload, null, 2)); // Descomenta si vuelve a fallar para ver el JSON exacto
 
     const response = await axios.post(url, payload, {
       headers: {
@@ -529,7 +526,6 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
   } catch (error) {
     const intuitError = error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
     console.error(`Error actualizando cliente ${qbCustomerId} en QuickBooks:`, intuitError);
-    // Si tienes descomentado el console.log de arriba, sabremos exactamente qué línea provocó esto.
     throw error;
   }
 }
