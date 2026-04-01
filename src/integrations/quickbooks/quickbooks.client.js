@@ -142,6 +142,24 @@ async function createCustomer(customerData) {
       payload.Job = true;
     }
 
+    // --- NUEVOS CAMPOS B2B ---
+    
+    // NIT (mapeado a AlternatePhone según requerimiento del usuario)
+    if (customerData.nit) {
+      payload.AlternatePhone = { FreeFormNumber: customerData.nit };
+    }
+
+    // WebAddress / Dominio
+    if (customerData.domain) {
+      // Nos aseguramos de que tenga protocolo para que QB no lo rechace (opcional)
+      let uri = customerData.domain;
+      if (uri && !uri.startsWith('http')) {
+        uri = `https://${uri}`;
+      }
+      payload.WebAddr = { URI: uri };
+    }
+
+
     // Vínculo bidireccional: guardamos el ID de HubSpot en el campo Notes
     if (customerData.hsId) {
       const prefix = isCompany ? "HS_COMPANY_ID" : "HS_CONTACT_ID";
@@ -295,6 +313,39 @@ async function getItemById(itemId) {
 }
 
 /**
+ * Actualiza un Item en QuickBooks.
+ * Requiere Id, SyncToken y sparse: true.
+ */
+async function updateItem(itemId, syncToken, itemData) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/item?minorversion=65`;
+
+    const payload = {
+      Id: String(itemId),
+      SyncToken: String(syncToken),
+      sparse: true,
+      ...itemData
+    };
+
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data.Item;
+  } catch (error) {
+    const intuitError =
+      error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error(`Error actualizando Item ${itemId} en QuickBooks:`, intuitError);
+    throw error;
+  }
+}
+
+/**
  * Crea una Factura (Invoice) en QuickBooks.
  * @param {Object} invoicePayload - Objeto formateado según las reglas de Intuit.
  */
@@ -443,9 +494,26 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     if (customerData.parentRef) {
       payload.ParentRef = { value: String(customerData.parentRef) };
       payload.Job = true;
-    } else {
+    } else if (customerData.parentRef === null) {
+      // Caso especial: Disociar (volver a ser cliente independiente)
+      // Para QBO, si Job es false, ParentRef NO debe estar presente en el payload.
       payload.Job = false;
     }
+
+    // --- NUEVOS CAMPOS B2B ---
+
+    if (customerData.nit) {
+        payload.AlternatePhone = { FreeFormNumber: String(customerData.nit) };
+    }
+
+    if (customerData.domain) {
+        let uri = customerData.domain;
+        if (uri && !uri.startsWith('http')) {
+            uri = `https://${uri}`;
+        }
+        payload.WebAddr = { URI: uri };
+    }
+
 
     // console.log("Payload a enviar a QB:", JSON.stringify(payload, null, 2)); // Descomenta si vuelve a fallar para ver el JSON exacto
 
@@ -479,4 +547,5 @@ module.exports = {
   getInvoice,
   getCustomerById,
   updateCustomer,
+  updateItem,
 };

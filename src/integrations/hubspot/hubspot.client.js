@@ -156,14 +156,9 @@ async function batchCreateContacts(contacts) {
   }
 }
 
-async function createCompany(companyName, qbId) {
+async function createCompany(properties) {
   try {
-    const payload = {
-      properties: {
-        name: companyName,
-        id_usuario_quickbooks: qbId.toString(), // Guardamos el ID del Padre
-      },
-    };
+    const payload = { properties };
     const response = await axios.post(
       "https://api.hubapi.com/crm/v3/objects/companies",
       payload,
@@ -177,7 +172,7 @@ async function createCompany(companyName, qbId) {
     return response.data; // Retorna el objeto que incluye el ID generado
   } catch (error) {
     console.error(
-      `Error creando la empresa ${companyName} en HubSpot:`,
+      `Error creando la empresa en HubSpot:`,
       error.response?.data || error.message,
     );
     throw error;
@@ -389,8 +384,19 @@ async function getAllContactsWithCompanyAssociations() {
 
 async function getCompanyDetails(companyId) {
   try {
+    const properties = [
+      "name",
+      "nit",
+      "phone",
+      "domain",
+      "address",
+      "city",
+      "country",
+      "id_usuario_quickbooks"
+    ].join(",");
+    
     const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}?properties=name,domain,id_usuario_quickbooks`,
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}?properties=${properties}`,
       {
         headers: {
           Authorization: `Bearer ${config.hubspot.accessToken}`,
@@ -490,7 +496,7 @@ async function getLineItemsByDealId(dealId) {
 async function getProductDetails(productId) {
   try {
     // Definimos las propiedades del producto necesarias para crear el Item en QuickBooks
-    const properties = "name,price,description,hs_sku,id_producto_quickbooks";
+    const properties = "name,price,description,hs_sku,id_producto_quickbooks,es_gravable,hs_price_usd";
 
     const response = await axios.get(
       `https://api.hubapi.com/crm/v3/objects/products/${productId}?properties=${properties}`,
@@ -841,6 +847,133 @@ async function getContactAssociatedCompanyIds(contactId) {
   }
 }
 
+/**
+ * Actualiza múltiples propiedades de un contacto en HubSpot.
+ */
+async function updateContact(contactId, properties) {
+  try {
+    const payload = { properties };
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(`Error actualizando contacto ${contactId} en HubSpot:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza múltiples propiedades de una empresa en HubSpot.
+ */
+async function updateCompany(companyId, properties) {
+  try {
+    const payload = { properties };
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(`Error actualizando empresa ${companyId} en HubSpot:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Busca un contacto en HubSpot utilizando el ID de QuickBooks.
+ */
+async function searchContactByQbId(qbId) {
+  try {
+    const payload = {
+      filterGroups: [{
+        filters: [{
+          propertyName: "id_usuario_quickbooks",
+          operator: "EQ",
+          value: qbId.toString()
+        }]
+      }]
+    };
+
+    const response = await axios.post(
+      "https://api.hubapi.com/crm/v3/objects/contacts/search",
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.total > 0) {
+      return response.data.results[0]; 
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error buscando contacto en HubSpot con QB ID ${qbId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Elimina la asociación entre un contacto y una empresa.
+ */
+async function disassociateContactFromCompany(contactId, companyId) {
+  try {
+    // Usamos el endpoint de eliminación de asociaciones
+    await axios.delete(
+      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return true;
+  } catch (error) {
+    console.error(`Error desasociando Contacto ${contactId} de Empresa ${companyId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza propiedades de un producto en HubSpot.
+ */
+async function updateProduct(productId, properties) {
+  try {
+    const payload = { properties };
+    const response = await axios.patch(
+      `https://api.hubapi.com/crm/v3/objects/products/${productId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error(`Error actualizando producto ${productId} en HubSpot:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -861,6 +994,7 @@ module.exports = {
   updateProductProperty,
   createProduct,
   searchProductByQbId,
+  updateProduct,
   getInvoiceDetails,
   getInvoiceAssociations,
   updateInvoiceProperty,
@@ -868,4 +1002,8 @@ module.exports = {
   searchInvoiceByCustomProperty,
   updateInvoice,
   getContactAssociatedCompanyIds,
+  updateContact,
+  updateCompany,
+  searchContactByQbId,
+  disassociateContactFromCompany,
 };

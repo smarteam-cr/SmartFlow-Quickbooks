@@ -38,6 +38,15 @@ async function handleQuickBooksWebhook(request, reply) {
             });
             console.log('=================================================');
           }
+          else if (entity.name === 'Customer' && (entity.operation === 'Create' || entity.operation === 'Update')) {
+            const customerId = entity.id;
+            console.log(`\n=== [Webhook] Procesando evento de CLIENTE (QBO) ID: ${customerId} ===`);
+            
+            contactSyncService.syncCustomerFromQuickbooks(customerId).catch(err => {
+              console.error('Error en el proceso en segundo plano de clientes:', err.message);
+            });
+            console.log('=================================================');
+          }
         }
       }
     }
@@ -68,24 +77,66 @@ const handleHubSpotWebhook = async (request, reply) => {
           event.subscriptionType === 'contact.propertyChange' ||
           event.subscriptionType === 'contact.associationChange'
         ) {
-
-          // 1. SUPRESIÓN DE ECO (Ahora targetId es seguro)
+          // 1. SUPRESIÓN DE ECO (Contactos)
           if (echoSuppression.wasCreatedInHs(targetId)) {
             console.log(`♻️ [Echo] Ignorando contacto ${targetId} (cambio interno).`);
             continue;
           }
 
-          // 2. FILTRO DE PROPIEDADES (Solo para cambios de valor)
+          // 2. FILTRO DE PROPIEDADES (Contactos)
           if (event.subscriptionType === 'contact.propertyChange') {
             const mappedProps = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country'];
             if (!mappedProps.includes(event.propertyName)) continue;
           }
 
-          // 3. PROCESAMIENTO
+          // 3. PROCESAMIENTO (Contactos)
           console.log(`⏱️ Encolando Sincronización para Contacto ${targetId} (${event.subscriptionType})...`);
-
           contactSyncService.processContact(targetId).catch(err => {
             console.error(`❌ Error sincronizando contacto ${targetId}:`, err.message);
+          });
+        } 
+        else if (
+          event.subscriptionType === 'company.creation' ||
+          event.subscriptionType === 'company.propertyChange'
+        ) {
+          // 1. SUPRESIÓN DE ECO (Empresas)
+          if (echoSuppression.wasCreatedInHs(targetId)) {
+            console.log(`♻️ [Echo] Ignorando empresa ${targetId} (cambio interno).`);
+            continue;
+          }
+
+          // 2. FILTRO DE PROPIEDADES (Empresas)
+          if (event.subscriptionType === 'company.propertyChange') {
+            const mappedProps = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'country'];
+            if (!mappedProps.includes(event.propertyName)) continue;
+          }
+
+          // 3. PROCESAMIENTO (Empresas)
+          console.log(`⏱️ Encolando Sincronización para Empresa ${targetId} (${event.subscriptionType})...`);
+          companySyncService.processCompany(targetId).catch(err => {
+            console.error(`❌ Error sincronizando empresa ${targetId}:`, err.message);
+          });
+        }
+        else if (
+          event.subscriptionType === 'product.creation' ||
+          event.subscriptionType === 'product.propertyChange'
+        ) {
+          // 1. SUPRESIÓN DE ECO (Productos)
+          if (echoSuppression.wasCreatedInHs(targetId)) {
+            console.log(`♻️ [Echo] Ignorando producto ${targetId} (cambio interno).`);
+            continue;
+          }
+
+          // 2. FILTRO DE PROPIEDADES (Productos)
+          if (event.subscriptionType === 'product.propertyChange') {
+            const mappedProps = ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'];
+            if (!mappedProps.includes(event.propertyName)) continue;
+          }
+
+          // 3. PROCESAMIENTO (Productos)
+          console.log(`⏱️ Encolando Sincronización para Producto ${targetId} (${event.subscriptionType})...`);
+          productSyncService.syncProductToQuickbooks(targetId).catch(err => {
+            console.error(`❌ Error sincronizando producto ${targetId}:`, err.message);
           });
         }
       } catch (err) {
