@@ -175,4 +175,97 @@ async function syncInvoiceFromQuickbooks(qbInvoiceId) {
   }
 }
 
-module.exports = { syncInvoiceToQuickbooks, syncInvoiceFromQuickbooks };
+/**
+ * --- SINCRONIZACIÓN HS -> QB (ACTUALIZACIÓN) ---
+ * Escucha cambios en HubSpot y los refleja en una factura ya existente en QuickBooks.
+ */
+async function syncHubSpotInvoiceToQuickbooks(invoiceId) {
+  try {
+    console.log(`\n=== 🔄 ACTUALIZANDO FACTURA DESDE HUBSPOT: ${invoiceId} ===`);
+
+    // 1. Obtener datos de la factura en HS
+    const hsInvoice = await hubspotClient.getInvoiceDetails(invoiceId);
+    if (!hsInvoice) throw new Error(`La factura ${invoiceId} no existe en HubSpot.`);
+
+    const qbInvoiceId = hsInvoice.properties.id_factura_quickbooks;
+    if (!qbInvoiceId) {
+      console.log(`ℹ️ La factura ${invoiceId} no tiene ID de QuickBooks. Intentando creación inicial...`);
+      return await syncInvoiceToQuickbooks(invoiceId);
+    }
+
+    // 🛡️ REGLA DE SEGURIDAD: Solo editar si está "Abierta" o sin estado
+    const currentStatus = hsInvoice.properties.estado_de_factura_qb;
+    if (currentStatus && currentStatus !== 'Abierta' && currentStatus !== '') {
+      console.warn(`🛑 Bloqueo Contable: No se puede editar la factura ${invoiceId} porque su estado es "${currentStatus}".`);
+      return;
+    }
+
+    // 2. Obtener el SyncToken actual desde QuickBooks
+    console.log(`🔍 Obteniendo estado actual de la factura ${qbInvoiceId} en QuickBooks...`);
+    const existingQbInvoice = await quickbooksClient.getInvoice(qbInvoiceId);
+    if (!existingQbInvoice) {
+        throw new Error(`La factura ${qbInvoiceId} no existe en QuickBooks.`);
+    }
+    const syncToken = existingQbInvoice.SyncToken;
+
+    // 3. Resolver Contacto Actual (por si cambió)
+    const contactAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'contacts');
+    let qbCustomerId = existingQbInvoice.CustomerRef.value; // Por defecto el actual
+    let contactInfo = null;
+
+    if (contactAssociations.length > 0) {
+      const contactId = contactAssociations[0];
+      const resolution = await contactSyncService.processContact(contactId);
+      qbCustomerId = resolution.qbCustomerId;
+      contactInfo = resolution.contactInfo;
+    }
+
+    // 4. Resolver Productos Actuales (sobrescritura completa para consistencia)
+    const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
+    console.log(`📦 Refrescando ${lineItemAssociations.length} productos...`);
+    
+    const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
+    const qbInvoiceLines = [];
+
+    for (const item of lineItemsData) {
+      let qbItemId = item.properties.id_producto_quickbooks;
+      
+      if (!qbItemId) {
+        const existingQbItem = await quickbooksClient.findItemByName(item.properties.name);
+        if (existingQbItem) {
+          qbItemId = existingQbItem.Id;
+        } else {
+          const newItem = await quickbooksClient.createItem({
+            Name: item.properties.name,
+            Type: "Service",
+            UnitPrice: item.properties.price ? Number(item.properties.price) : 0,
+            IncomeAccountRef: { value: require('../config').quickbooks.incomeAccountId.toString() }
+          });
+          qbItemId = newItem.Id;
+        }
+      }
+
+      const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
+      qbInvoiceLines.push(mappedLine);
+    }
+
+    // 5. Mapear Payload y Actualizar
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
+    
+    console.log(`📝 Enviando actualización a QuickBooks (ID: ${qbInvoiceId})...`);
+    echoSuppression.markAsCreatedInQb(qbInvoiceId); // Evitar eco de vuelta
+    await quickbooksClient.updateInvoice(qbInvoiceId, syncToken, qbInvoicePayload);
+
+    console.log(`✅ Factura ${invoiceId} actualizada correctamente en QuickBooks.`);
+    
+  } catch (error) {
+    console.error(`❌ Error actualizando factura ${invoiceId} hacia QuickBooks:`, error.message);
+    throw error;
+  }
+}
+
+module.exports = { 
+  syncInvoiceToQuickbooks, 
+  syncInvoiceFromQuickbooks,
+  syncHubSpotInvoiceToQuickbooks 
+};

@@ -66,7 +66,7 @@ async function processDealWebhook(dealId) {
     console.log(`\n[Workaround] Disparando sincronización de factura simulada...`);
 
     // TODO: CAMBIAR ESTE ID EN CADA PRUEBA CLONANDO LA FACTURA EN HUBSPOT
-    const idFacturaDePrueba = '545262808483';
+    const idFacturaDePrueba = '545773692265';
 
     // 1. OBTENER CONTACTOS DE LA FACTURA
     console.log(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);
@@ -102,4 +102,57 @@ async function processDealWebhook(dealId) {
   }
 }
 
-module.exports = { processPaymentNotification, processDealWebhook };
+/**
+ * Procesa webhooks de Facturas de HubSpot (Objeto 0-53).
+ */
+async function processHubSpotInvoiceWebhook(objectId, subscriptionType, propertyName) {
+  try {
+    console.log(`\n[HubSpot Webhook] Recibido evento ${subscriptionType} para Factura: ${objectId}`);
+
+    // Evitamos bucles infinitos si el cambio es en estados que nosotros mismos actualizamos
+    const propertiesToIgnore = ['id_factura_quickbooks', 'estado_de_factura_qb', 'importe_pagado_qb', 'saldo_pendiente_qb'];
+    if (subscriptionType === 'object.propertyChange' && propertiesToIgnore.includes(propertyName)) {
+      return;
+    }
+
+    // Disparamos la actualización hacia QuickBooks
+    await invoiceSyncService.syncHubSpotInvoiceToQuickbooks(objectId);
+
+  } catch (error) {
+    console.error(`[HubSpot Webhook] Error procesando factura ${objectId}:`, error.message);
+  }
+}
+
+/**
+ * Procesa webhooks de Partidas de HubSpot (Line Items 0-27).
+ * Identifica la factura asociada y refresca la info en QuickBooks.
+ */
+async function processHubSpotLineItemWebhook(lineItemId) {
+  try {
+    console.log(`\n[HubSpot Webhook] Cambio detectado en Line Item: ${lineItemId}`);
+
+    // 1. Buscar a qué factura pertenece esta partida
+    const associatedInvoices = await hubspotClient.getLineItemAssociations(lineItemId, 'invoices');
+    
+    if (associatedInvoices.length === 0) {
+      console.log(`ℹ️ El Line Item ${lineItemId} no está asociado a ninguna factura aún.`);
+      return;
+    }
+
+    // 2. Refrescar cada factura asociada
+    for (const invoiceId of associatedInvoices) {
+      console.log(`🔄 Refrescando Factura ${invoiceId} debido a cambio en sus ítems...`);
+      await invoiceSyncService.syncHubSpotInvoiceToQuickbooks(invoiceId);
+    }
+
+  } catch (error) {
+    console.error(`[HubSpot Webhook] Error procesando Line Item ${lineItemId}:`, error.message);
+  }
+}
+
+module.exports = { 
+  processPaymentNotification, 
+  processDealWebhook,
+  processHubSpotInvoiceWebhook,
+  processHubSpotLineItemWebhook
+};

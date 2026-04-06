@@ -3,6 +3,8 @@ const jobService = require('../services/job.service');
 const contactSyncService = require('../services/contact.sync.service');
 const companySyncService = require('../services/company.sync.service');
 const productSyncService = require('../services/product.sync.service');
+const invoiceSyncService = require('../services/invoice.sync.service');
+const paymentSyncService = require('../services/payment.sync.service');
 const webhookService = require('../services/webhook.service');
 const mutex = require('../utils/mutex.util');
 
@@ -10,6 +12,8 @@ const mutex = require('../utils/mutex.util');
 const MAPPED_CONTACT_PROPS = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country'];
 const MAPPED_COMPANY_PROPS = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'country'];
 const MAPPED_PRODUCT_PROPS = ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'];
+const MAPPED_INVOICE_PROPS = ['hs_invoice_date', 'hs_due_date', 'hs_title', 'id_factura_quickbooks', 'estado_de_factura_qb'];
+const MAPPED_LINEITEM_PROPS = ['quantity', 'price', 'name', 'description', 'discount', 'es_gravable'];
 
 async function processJob(job) {
     // CAMBIO: Usamos entityId y extraemos source
@@ -47,7 +51,18 @@ async function processJob(job) {
             if (entity === 'contact') await contactSyncService.processContact(entityId);
             else if (entity === 'company') await companySyncService.processCompany(entityId);
             else if (entity === 'product') await productSyncService.syncProductToQuickbooks(entityId);
-            else if (entity === 'invoice') await webhookService.processDealWebhook(entityId);
+            else if (entity === 'invoice') {
+                if (eventType.includes('deal')) {
+                    // Creación inicial desde negocio
+                    await webhookService.processDealWebhook(entityId);
+                } else {
+                    // Actualización de factura propiamente dicha
+                    await webhookService.processHubSpotInvoiceWebhook(entityId, eventType, payload.propertyName);
+                }
+            }
+            else if (entity === 'line_item') {
+                await webhookService.processHubSpotLineItemWebhook(entityId);
+            }
 
         } else if (source === 'QUICKBOOKS') {
             console.log(`📡 Procesando sincronización QB -> HS para ${entity} ID: ${entityId}`);

@@ -999,6 +999,33 @@ async function associateInvoiceToDeal(invoiceId, dealId) {
   }
 }
 
+/**
+ * Obtiene las asociaciones de un Line Item (Partida).
+ * @param {string} lineItemId - ID de la partida en HubSpot.
+ * @param {string} toObjectType - Tipo de objeto destino (ej: 'invoices').
+ */
+async function getLineItemAssociations(lineItemId, toObjectType) {
+  try {
+    const response = await axios.get(
+      `https://api.hubapi.com/crm/v3/objects/line_items/${lineItemId}/associations/${toObjectType}`,
+      {
+        headers: {
+          Authorization: `Bearer ${config.hubspot.accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    
+    return response.data.results.map((assoc) => assoc.id);
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return [];
+    }
+    console.error(`Error obteniendo asociaciones para el Line Item ${lineItemId} hacia ${toObjectType}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 async function disassociateContactFromCompany(contactId, companyId) {
   try {
     // Usamos el endpoint de eliminación de asociaciones
@@ -1076,4 +1103,5 @@ module.exports = {
   updateCompany,
   searchContactByQbId,
   disassociateContactFromCompany,
+  getLineItemAssociations,
 };

@@ -530,6 +530,46 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
   }
 }
 
+/**
+ * Actualiza una Factura en QuickBooks.
+ * Requiere Id, SyncToken y sparse: true (recomendado).
+ * 
+ * @param {string} qbInvoiceId - ID de la factura en QB.
+ * @param {string} syncToken - SyncToken actual del registro.
+ * @param {Object} invoicePayload - Datos actualizados (mismo formato que createInvoice).
+ */
+async function updateInvoice(qbInvoiceId, syncToken, invoicePayload) {
+  try {
+    const realmId = config.quickbooks.realmId;
+    const url = `${config.quickbooks.baseUrl}/${realmId}/invoice?minorversion=65`;
+
+    const payload = {
+      Id: String(qbInvoiceId),
+      SyncToken: String(syncToken),
+      sparse: true,
+      ...invoicePayload
+    };
+
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${config.quickbooks.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data.Invoice;
+  } catch (error) {
+    const intuitError =
+      error.response?.data?.Fault?.Error?.[0]?.Detail || error.message;
+    console.error(`Error actualizando factura ${qbInvoiceId} en QuickBooks:`, intuitError);
+    if (error.response?.data?.Fault) {
+      console.error('Detalles completos del error de QB:', JSON.stringify(error.response.data.Fault, null, 2));
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   getPaymentDetails,
   findCustomerByEmail,
@@ -544,4 +584,5 @@ module.exports = {
   getCustomerById,
   updateCustomer,
   updateItem,
+  updateInvoice,
 };

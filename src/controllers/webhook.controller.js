@@ -67,7 +67,14 @@ async function handleHubSpotWebhook(request, reply) {
         'deal.propertyChange': 'invoice',
       };
 
-      const internalEntity = entityMap[event.subscriptionType];
+      let internalEntity = entityMap[event.subscriptionType];
+
+      // Casos Especiales por ObjectTypeId (Facturas y Line Items Beta)
+      if (event.objectTypeId === '0-53') {
+        internalEntity = 'invoice';
+      } else if (event.objectTypeId === '0-27' || event.subscriptionType.startsWith('line_item')) {
+        internalEntity = 'line_item';
+      }
 
       // Usamos tu validación exacta:
       if (internalEntity && targetId) {
