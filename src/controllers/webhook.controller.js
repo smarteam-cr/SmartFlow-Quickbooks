@@ -6,6 +6,7 @@ const invoiceSyncService = require('../services/invoice.sync.service');
 const paymentSyncService = require('../services/payment.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const mutex = require('../utils/mutex.util');
+const jobService = require('../services/job.service');
 
 async function handleQuickBooksWebhook(request, reply) {
   try {
@@ -20,8 +21,7 @@ async function handleQuickBooksWebhook(request, reply) {
       for (const notification of payload.eventNotifications) {
         const entities = notification.dataChangeEvent.entities;
 
-        for (const entity of entities) {
-          console.log(entity.operation);          
+        for (const entity of entities) {       
           if (entity.name === 'Payment' && (entity.operation === 'Create' || entity.operation === 'Update')) {
             const paymentId = entity.id;
             console.log(`\n=== [Webhook] Procesando evento de PAGO (QBO) ID: ${paymentId} ===`);
@@ -75,7 +75,6 @@ const handleHubSpotWebhook = async (request, reply) => {
 
     for (const event of events) {
       try {
-        // 🌟 CLAVE: Si es asociación usa fromObjectId, si no usa objectId
         const targetId = event.fromObjectId || event.objectId;
 
         if (!targetId) {
@@ -83,87 +82,43 @@ const handleHubSpotWebhook = async (request, reply) => {
           continue;
         }
 
-        if (
-          event.subscriptionType === 'contact.creation' ||
-          event.subscriptionType === 'contact.propertyChange' ||
-          event.subscriptionType === 'contact.associationChange'
-        ) {
-          // 1. SUPRESIÓN DE ECO (Contactos)
-          if (echoSuppression.wasCreatedInHs(targetId)) {
-            console.log(`♻️ [Echo] Ignorando contacto ${targetId} (cambio interno).`);
-            continue;
-          }
+        // Determinamos la entidad
+        const entityMap = {
+          'contact.creation': 'contact',
+          'contact.propertyChange': 'contact',
+          'contact.associationChange': 'contact',
+          'company.creation': 'company',
+          'company.propertyChange': 'company',
+          'product.creation': 'product',
+          'product.propertyChange': 'product',
+          'deal.creation': 'invoice',
+          'deal.propertyChange': 'invoice',
+        };
 
-          // 2. FILTRO DE PROPIEDADES (Contactos)
-          if (event.subscriptionType === 'contact.propertyChange') {
-            const mappedProps = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country'];
-            if (!mappedProps.includes(event.propertyName)) continue;
-          }
+        const entity = entityMap[event.subscriptionType];
 
-          // 3. PROCESAMIENTO (Contactos)
-          console.log(`⏱️ Encolando Sincronización para Contacto ${targetId} (${event.subscriptionType})...`);
-          contactSyncService.processContact(targetId).catch(err => {
-            console.error(`❌ Error sincronizando contacto ${targetId}:`, err.message);
-          });
-        } 
-        else if (
-          event.subscriptionType === 'company.creation' ||
-          event.subscriptionType === 'company.propertyChange'
-        ) {
-          // 1. SUPRESIÓN DE ECO (Empresas)
-          if (echoSuppression.wasCreatedInHs(targetId)) {
-            console.log(`♻️ [Echo] Ignorando empresa ${targetId} (cambio interno).`);
-            continue;
-          }
-
-          // 2. FILTRO DE PROPIEDADES (Empresas)
-          if (event.subscriptionType === 'company.propertyChange') {
-            const mappedProps = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'country'];
-            if (!mappedProps.includes(event.propertyName)) continue;
-          }
-
-          // 3. PROCESAMIENTO (Empresas)
-          console.log(`⏱️ Encolando Sincronización para Empresa ${targetId} (${event.subscriptionType})...`);
-          companySyncService.processCompany(targetId).catch(err => {
-            console.error(`❌ Error sincronizando empresa ${targetId}:`, err.message);
-          });
+        if (!entity) {
+          console.warn(`⚠️ Tipo de evento no mapeado: ${event.subscriptionType}`);
+          continue;
         }
-        else if (
-          event.subscriptionType === 'product.creation' ||
-          event.subscriptionType === 'product.propertyChange'
-        ) {
-          // 1. SUPRESIÓN DE ECO (Productos)
-          if (echoSuppression.wasCreatedInHs(targetId)) {
-            console.log(`♻️ [Echo] Ignorando producto ${targetId} (cambio interno).`);
-            continue;
-          }
 
-          // 2. FILTRO DE PROPIEDADES (Productos)
-          if (event.subscriptionType === 'product.propertyChange') {
-            const mappedProps = ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'];
-            if (!mappedProps.includes(event.propertyName)) continue;
-          }
+        // Guardamos el job en BD y respondemos 200 de inmediato
+        const job = await jobService.createJob(
+          entity,
+          targetId,
+          event.subscriptionType,
+          event
+        );
 
-          // 3. PROCESAMIENTO (Productos)
-          console.log(`⏱️ Encolando Sincronización para Producto ${targetId} (${event.subscriptionType})...`);
-          productSyncService.syncProductToQuickbooks(targetId).catch(err => {
-            console.error(`❌ Error sincronizando producto ${targetId}:`, err.message);
-          });
-        }
-        else if (
-          event.subscriptionType === 'deal.creation' ||
-          event.subscriptionType === 'deal.propertyChange'
-        ) {
-          console.log(`⏱️ Encolando Procesamiento para Negocio ${targetId} (${event.subscriptionType})...`);
-          webhookService.processDealWebhook(targetId).catch(err => {
-            console.error(`❌ Error procesando negocio ${targetId}:`, err.message);
-          });
-        }
+        console.log(`✅ Job creado en BD [${job._id}] para ${entity} ID: ${targetId}`);
+
       } catch (err) {
-        console.error(`❌ Error en evento individual:`, err.message);
+        console.error(`❌ Error guardando job para evento:`, err.message);
       }
     }
+
     return reply.code(200).send({ status: 'success' });
+
   } catch (error) {
     console.error('💥 Error crítico en controlador:', error);
     return reply.code(500).send({ status: 'error' });

@@ -87,9 +87,7 @@ async function _internalProcessQuickbooksPayment(paymentId) {
 }
 
 async function processQuickbooksPayment(paymentId) {
-    return mutex.runSequentially(`QB_PAY_${paymentId}`, async () => {
-        return await _internalProcessQuickbooksPayment(paymentId);
-    });
+    return await _internalProcessQuickbooksPayment(paymentId);
 }
 
 module.exports = {

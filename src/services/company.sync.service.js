@@ -99,9 +99,7 @@ async function _internalProcessCompanyFromHubSpot(hsCompanyId) {
  * Función pública con Mutex (Sequential Processing)
  */
 async function processCompany(hsCompanyId) {
-    return mutex.runSequentially(`HS_COMP_${hsCompanyId}`, async () => {
-        return await _internalProcessCompanyFromHubSpot(hsCompanyId);
-    });
+    return await _internalProcessCompanyFromHubSpot(hsCompanyId);   
 }
 
 module.exports = { processCompany };

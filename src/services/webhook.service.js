@@ -66,7 +66,7 @@ async function processDealWebhook(dealId) {
     console.log(`\n[Workaround] Disparando sincronización de factura simulada...`);
 
     // TODO: CAMBIAR ESTE ID EN CADA PRUEBA CLONANDO LA FACTURA EN HUBSPOT
-    const idFacturaDePrueba = '544587894179';
+    const idFacturaDePrueba = '545262808483';
 
     // 1. OBTENER CONTACTOS DE LA FACTURA
     console.log(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);

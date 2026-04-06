@@ -162,9 +162,7 @@ async function _internalProcessContact(contactId) {
 // Esta es la función que exportas y que todos llamarán
 async function processContact(contactId) {
   // Aquí es donde aplicamos el candado globalmente
-  return mutex.runSequentially(contactId, async () => {
-    return await _internalProcessContact(contactId);
-  });
+  return await _internalProcessContact(contactId);
 }
 
 /**
@@ -345,9 +343,7 @@ async function _internalSyncCustomerFromQuickbooks(qbCustomerId) {
   }
 }
 async function syncCustomerFromQuickbooks(qbCustomerId) {
-  return mutex.runSequentially(`QB_CUST_${qbCustomerId}`, async () => {
-    return await _internalSyncCustomerFromQuickbooks(qbCustomerId);
-  });
+  return await _internalSyncCustomerFromQuickbooks(qbCustomerId);
 }
 
 module.exports = {

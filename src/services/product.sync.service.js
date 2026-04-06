@@ -171,15 +171,11 @@ async function _internalSyncProductFromQuickbooks(qbItemId) {
  * Wrappers con Mutex
  */
 async function syncProductToQuickbooks(hsProductId) {
-    return mutex.runSequentially(`HS_PROD_${hsProductId}`, async () => {
-        return await _internalSyncProductToQuickbooks(hsProductId);
-    });
+    return await _internalSyncProductToQuickbooks(hsProductId);
 }
 
 async function syncProductFromQuickbooks(qbItemId) {
-    return mutex.runSequentially(`QB_PROD_${qbItemId}`, async () => {
-        return await _internalSyncProductFromQuickbooks(qbItemId);
-    });
+    return await _internalSyncProductFromQuickbooks(qbItemId);
 }
 
 module.exports = {
