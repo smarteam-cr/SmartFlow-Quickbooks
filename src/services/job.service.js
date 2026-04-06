@@ -1,15 +1,15 @@
 const SyncJob = require('../db/models/job.model');
 
-async function createJob(entity, hsObjectId, eventType, payload) {
-  const job = new SyncJob({
-    entity,
-    hsObjectId: hsObjectId.toString(),
-    eventType,
-    payload,
-    status: 'PENDING',
-  });
-  await job.save();
-  return job;
+async function createJob(jobData) {
+    const job = new SyncJob({
+        source: jobData.source,
+        entity: jobData.entity,
+        entityId: jobData.entityId,
+        eventType: jobData.eventType,
+        payload: jobData.payload,
+        status: 'PENDING'
+    });
+    return await job.save();
 }
 
 async function markCompleted(jobId) {
@@ -20,11 +20,17 @@ async function markCompleted(jobId) {
 }
 
 async function markFailed(jobId, errorMessage) {
-  await SyncJob.findByIdAndUpdate(jobId, {
-    status: 'FAILED',
-    lastError: errorMessage,
-    $inc: { attempts: 1 },
-  });
+  const updatedJob = await SyncJob.findByIdAndUpdate(
+    jobId,
+    {
+      lastError: errorMessage,
+      $inc: { attempts: 1 },
+      status: 'FAILED', 
+    },
+    { new: true } // Esto nos devuelve el documento ya incrementado
+  );
+
+  return updatedJob;
 }
 
 module.exports = { createJob, markCompleted, markFailed };
