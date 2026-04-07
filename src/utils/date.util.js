@@ -17,7 +17,7 @@ const formatToQbDate = (dateInput) => {
 
   const formattedDate = `${year}-${month}-${day}`;
 
-  console.log(`[DateUtil] Input: ${dateInput} -> Output: ${formattedDate}`);
+  logger.info(`[DateUtil] Input: ${dateInput} -> Output: ${formattedDate}`);
   return formattedDate;
 };
 

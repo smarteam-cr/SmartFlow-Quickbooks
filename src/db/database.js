@@ -1,11 +1,13 @@
 const mongoose = require('mongoose');
+const config = require('../config');
+const logger = require('../lib/logger.lib');
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect('mongodb://127.0.0.1:27017/smartflow-quickbooks?replicaSet=rs0');
-    console.log(`MongoDB conectado: ${conn.connection.host}`);
+    const conn = await mongoose.connect(config.mongo.uri);
+    logger.info(`MongoDB conectado: ${conn.connection.host}`);
   } catch (error) {
-    console.error('Error conectando a MongoDB:', error.message);
+    logger.error('Error conectando a MongoDB:', error);
     process.exit(1);
   }
 };

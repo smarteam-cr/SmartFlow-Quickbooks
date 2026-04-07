@@ -1,5 +1,6 @@
 const axios = require("axios");
 const authService = require("../../services/auth.service");
+const logger = require("../../lib/logger.lib");
 const { DEFAULT_TENANT_ID } = require("../../config/constants");
 
 // Instancia centralizada de Axios para HubSpot
@@ -28,10 +29,10 @@ async function getContactDetails(contactId) {
     return response.data;
   } catch (error) {
     if (error.response && error.response.status === 404) {
-      console.warn(`El contacto ${contactId} devolvió 404 en HubSpot (Posiblemente fue borrado).`);
+      logger.warn(`El contacto ${contactId} devolvió 404 en HubSpot (Posiblemente fue borrado).`);
       return null;
     }
-    console.error(`Error crítico obteniendo el contacto ${contactId} de HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error crítico obteniendo el contacto ${contactId} de HubSpot:`, error);
     throw error;
   }
 }
@@ -46,7 +47,7 @@ async function updateContactProperty(contactId, qbId) {
     const response = await hsClient.patch(`/crm/v3/objects/contacts/${contactId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando el ID en HubSpot para el contacto ${contactId}:`, error.response?.data || error.message);
+    logger.error(`Error actualizando el ID en HubSpot para el contacto ${contactId}:`, error);
     throw error;
   }
 }
@@ -59,7 +60,7 @@ async function updateCompanyProperty(companyId, qbId) {
     const response = await hsClient.patch(`/crm/v3/objects/companies/${companyId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando el ID en HubSpot para la empresa ${companyId}:`, error.response?.data || error.message);
+    logger.error(`Error actualizando el ID en HubSpot para la empresa ${companyId}:`, error);
     throw error;
   }
 }
@@ -68,7 +69,7 @@ async function getAllContacts() {
   try {
     let allContacts = [];
     let after = undefined;
-    console.log("Descargando contactos históricos de HubSpot...");
+    logger.info("Descargando contactos históricos de HubSpot...");
     do {
       let url = `/crm/v3/objects/contacts?limit=35&properties=email,firstname,lastname,id_usuario_quickbooks`;
       if (after) {
@@ -78,10 +79,10 @@ async function getAllContacts() {
       allContacts = allContacts.concat(response.data.results);
       after = response.data.paging?.next?.after;
     } while (after);
-    console.log(`Se descargaron ${allContacts.length} contactos de HubSpot.`);
+    logger.info(`Se descargaron ${allContacts.length} contactos de HubSpot.`);
     return allContacts;
   } catch (error) {
-    console.error("Error obteniendo todos los contactos de HubSpot:", error.response?.data || error.message);
+    logger.error("Error obteniendo todos los contactos de HubSpot:", error);
     throw error;
   }
 }
@@ -95,7 +96,7 @@ async function batchCreateContacts(contacts) {
     if (error.response?.data) {
       return error.response.data;
     }
-    console.error("Error en batch create de HubSpot:", error.message);
+    logger.error("Error en batch create de HubSpot:", error);
     throw error;
   }
 }
@@ -106,7 +107,7 @@ async function createCompany(properties) {
     const response = await hsClient.post("/crm/v3/objects/companies", payload);
     return response.data;
   } catch (error) {
-    console.error(`Error creando la empresa en HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error creando la empresa en HubSpot:`, error);
     throw error;
   }
 }
@@ -125,11 +126,11 @@ async function createSingleContact(contactData, qbId) {
     return response.data;
   } catch (error) {
     if (error.response?.status === 409) {
-      console.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
+      logger.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
       const existingId = error.response.data.message.match(/\d+/)[0];
       return { id: existingId };
     }
-    console.error("Error creando contacto en HubSpot:", error.response?.data || error.message);
+    logger.error("Error creando contacto en HubSpot:", error);
     throw error;
   }
 }
@@ -139,7 +140,7 @@ async function associateContactToCompany(contactId, companyId) {
     const response = await hsClient.put(`/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`, {});
     return response.data;
   } catch (error) {
-    console.error(`Error asociando Contacto ${contactId} a Empresa ${companyId}:`, error.response?.data || error.message);
+    logger.error(`Error asociando Contacto ${contactId} a Empresa ${companyId}:`, error);
     throw error;
   }
 }
@@ -161,7 +162,7 @@ async function searchCompanyByQbId(qbId) {
     }
     return null;
   } catch (error) {
-    console.error(`Error buscando empresa con QB ID ${qbId}:`, error.response?.data || error.message);
+    logger.error(`Error buscando empresa con QB ID ${qbId}:`, error);
     throw error;
   }
 }
@@ -170,7 +171,7 @@ async function getAllCompanies() {
   try {
     let allCompanies = [];
     let after = undefined;
-    console.log("Descargando empresas de HubSpot...");
+    logger.info("Descargando empresas de HubSpot...");
     do {
       let url = `/crm/v3/objects/companies?limit=100&properties=name,domain,id_usuario_quickbooks`;
       if (after) {
@@ -180,10 +181,10 @@ async function getAllCompanies() {
       allCompanies = allCompanies.concat(response.data.results);
       after = response.data.paging?.next?.after;
     } while (after);
-    console.log(`Se descargaron ${allCompanies.length} empresas de HubSpot.`);
+    logger.info(`Se descargaron ${allCompanies.length} empresas de HubSpot.`);
     return allCompanies;
   } catch (error) {
-    console.error("Error obteniendo empresas de HubSpot:", error.response?.data || error.message);
+    logger.error("Error obteniendo empresas de HubSpot:", error);
     throw error;
   }
 }
@@ -196,7 +197,7 @@ async function getAssociatedContactIds(companyId) {
     if (error.response?.status === 404) {
       return [];
     }
-    console.error(`Error obteniendo asociaciones de la empresa ${companyId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo asociaciones de la empresa ${companyId}:`, error);
     throw error;
   }
 }
@@ -205,7 +206,7 @@ async function getAllContactsWithCompanyAssociations() {
   try {
     let allContacts = [];
     let after = undefined;
-    console.log("Descargando contactos de HubSpot con sus asociaciones (Padres)...");
+    logger.info("Descargando contactos de HubSpot con sus asociaciones (Padres)...");
     do {
       let url = `/crm/v3/objects/contacts?limit=100&properties=email,firstname,lastname,company&associations=company`;
       if (after) {
@@ -215,10 +216,10 @@ async function getAllContactsWithCompanyAssociations() {
       allContacts = allContacts.concat(response.data.results);
       after = response.data.paging?.next?.after;
     } while (after);
-    console.log(`Se descargaron ${allContacts.length} contactos con asociaciones.`);
+    logger.info(`Se descargaron ${allContacts.length} contactos con asociaciones.`);
     return allContacts;
   } catch (error) {
-    console.error("Error obteniendo contactos con asociaciones:", error.response?.data || error.message);
+    logger.error("Error obteniendo contactos con asociaciones:", error);
     throw error;
   }
 }
@@ -230,7 +231,7 @@ async function getCompanyDetails(companyId) {
     return response.data;
   } catch (error) {
     if (error.response?.status === 404) return null;
-    console.error(`Error obteniendo detalles de empresa ${companyId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo detalles de empresa ${companyId}:`, error);
     throw error;
   }
 }
@@ -241,7 +242,7 @@ async function getDealDetails(dealId) {
     const response = await hsClient.get(`/crm/v3/objects/deals/${dealId}?properties=${properties}`);
     return response.data;
   } catch (error) {
-    console.error(`Error obteniendo el negocio ${dealId} de HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo el negocio ${dealId} de HubSpot:`, error);
     throw error;
   }
 }
@@ -260,10 +261,10 @@ async function getLineItemsByDealId(dealId) {
     return detailsResponse.data.results;
   } catch (error) {
     if (error.response?.status === 404) {
-      console.warn(`El negocio ${dealId} no tiene line items asociados o no existen.`);
+      logger.warn(`El negocio ${dealId} no tiene line items asociados o no existen.`);
       return [];
     }
-    console.error(`Error obteniendo line items para el negocio ${dealId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo line items para el negocio ${dealId}:`, error);
     throw error;
   }
 }
@@ -275,10 +276,10 @@ async function getProductDetails(productId) {
     return response.data;
   } catch (error) {
     if (error.response && error.response.status === 404) {
-      console.warn(`El producto ${productId} devolvió 404 en HubSpot.`);
+      logger.warn(`El producto ${productId} devolvió 404 en HubSpot.`);
       return null;
     }
-    console.error(`Error obteniendo el producto ${productId} de HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo el producto ${productId} de HubSpot:`, error);
     throw error;
   }
 }
@@ -289,7 +290,7 @@ async function updateProductProperty(productId, qbId) {
     const response = await hsClient.patch(`/crm/v3/objects/products/${productId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando el ID en HubSpot para el producto ${productId}:`, error.response?.data || error.message);
+    logger.error(`Error actualizando el ID en HubSpot para el producto ${productId}:`, error);
     throw error;
   }
 }
@@ -309,7 +310,7 @@ async function createProduct(productData) {
     const response = await hsClient.post("/crm/v3/objects/products", payload);
     return response.data;
   } catch (error) {
-    console.error("Error creando producto en HubSpot:", error.response?.data || error.message);
+    logger.error("Error creando producto en HubSpot:", error);
     throw error;
   }
 }
@@ -331,7 +332,7 @@ async function searchProductByQbId(qbId) {
     }
     return null;
   } catch (error) {
-    console.error(`Error buscando producto en HubSpot con QB ID ${qbId}:`, error.response?.data || error.message);
+    logger.error(`Error buscando producto en HubSpot con QB ID ${qbId}:`, error);
     throw error;
   }
 }
@@ -343,10 +344,10 @@ async function getInvoiceDetails(invoiceId) {
     return response.data;
   } catch (error) {
     if (error.response?.status === 404) {
-      console.warn(`La factura ${invoiceId} devolvió 404 en HubSpot.`);
+      logger.warn(`La factura ${invoiceId} devolvió 404 en HubSpot.`);
       return null;
     }
-    console.error(`Error obteniendo la factura ${invoiceId} de HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo la factura ${invoiceId} de HubSpot:`, error);
     throw error;
   }
 }
@@ -357,7 +358,7 @@ async function getInvoiceAssociations(invoiceId, toObjectType) {
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
     if (error.response?.status === 404) return [];
-    console.error(`Error obteniendo asociaciones de ${toObjectType} para la factura ${invoiceId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo asociaciones de ${toObjectType} para la factura ${invoiceId}:`, error);
     throw error;
   }
 }
@@ -368,7 +369,7 @@ async function updateInvoiceProperty(invoiceId, qbInvoiceId) {
     const response = await hsClient.patch(`/crm/v3/objects/invoices/${invoiceId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando el ID en HubSpot para la factura ${invoiceId}:`, error.response?.data || error.message);
+    logger.error(`Error actualizando el ID en HubSpot para la factura ${invoiceId}:`, error);
     throw error;
   }
 }
@@ -383,7 +384,7 @@ async function getLineItemsDetails(lineItemIds) {
     const response = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
     return response.data.results;
   } catch (error) {
-    console.error("Error obteniendo detalles de los Line Items:", error.response?.data || error.message);
+    logger.error("Error obteniendo detalles de los Line Items:", error);
     throw error;
   }
 }
@@ -405,7 +406,7 @@ async function searchInvoiceByCustomProperty(propertyName, value) {
     }
     return null;
   } catch (error) {
-    console.error(`Error buscando factura en HubSpot con ${propertyName} = ${value}:`, error.response?.data || error.message);
+    logger.error(`Error buscando factura en HubSpot con ${propertyName} = ${value}:`, error);
     throw error;
   }
 }
@@ -416,7 +417,7 @@ async function updateInvoice(invoiceId, propertiesToUpdate) {
     const response = await hsClient.patch(`/crm/v3/objects/invoices/${invoiceId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando propiedades en la factura ${invoiceId}:`, error.response?.data || error.message);
+    logger.error(`Error actualizando propiedades en la factura ${invoiceId}:`, error);
     throw error;
   }
 }
@@ -427,7 +428,7 @@ async function getContactAssociatedCompanyIds(contactId) {
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
     if (error.response?.status === 404) return [];
-    console.error(`Error obteniendo asociaciones de empresas para el contacto ${contactId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo asociaciones de empresas para el contacto ${contactId}:`, error);
     throw error;
   }
 }
@@ -438,7 +439,7 @@ async function updateContact(contactId, properties) {
     const response = await hsClient.patch(`/crm/v3/objects/contacts/${contactId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando contacto ${contactId} en HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error actualizando contacto ${contactId} en HubSpot:`, error);
     throw error;
   }
 }
@@ -449,7 +450,7 @@ async function updateCompany(companyId, properties) {
     const response = await hsClient.patch(`/crm/v3/objects/companies/${companyId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando empresa ${companyId} en HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error actualizando empresa ${companyId} en HubSpot:`, error);
     throw error;
   }
 }
@@ -471,7 +472,7 @@ async function searchContactByQbId(qbId) {
     }
     return null;
   } catch (error) {
-    console.error(`Error buscando contacto en HubSpot con QB ID ${qbId}:`, error.response?.data || error.message);
+    logger.error(`Error buscando contacto en HubSpot con QB ID ${qbId}:`, error);
     throw error;
   }
 }
@@ -482,7 +483,7 @@ async function getDealAssociatedContacts(dealId) {
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
     if (error.response?.status === 404) return [];
-    console.error(`Error obteniendo asociaciones de contactos para el negocio ${dealId}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo asociaciones de contactos para el negocio ${dealId}:`, error);
     throw error;
   }
 }
@@ -492,7 +493,7 @@ async function associateInvoiceToContact(invoiceId, contactId) {
     await hsClient.put(`/crm/v3/objects/invoices/${invoiceId}/associations/contacts/${contactId}/invoice_to_contact`, {});
     return true;
   } catch (error) {
-    console.error(`Error asociando Factura ${invoiceId} a Contacto ${contactId}:`, error.response?.data || error.message);
+    logger.error(`Error asociando Factura ${invoiceId} a Contacto ${contactId}:`, error);
     throw error;
   }
 }
@@ -502,7 +503,7 @@ async function associateInvoiceToDeal(invoiceId, dealId) {
     await hsClient.put(`/crm/v3/objects/invoices/${invoiceId}/associations/deals/${dealId}/invoice_to_deal`, {});
     return true;
   } catch (error) {
-    console.error(`Error asociando Factura ${invoiceId} a Negocio ${dealId}:`, error.response?.data || error.message);
+    logger.error(`Error asociando Factura ${invoiceId} a Negocio ${dealId}:`, error);
     throw error;
   }
 }
@@ -513,7 +514,7 @@ async function getLineItemAssociations(lineItemId, toObjectType) {
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
     if (error.response?.status === 404) return [];
-    console.error(`Error obteniendo asociaciones para el Line Item ${lineItemId} hacia ${toObjectType}:`, error.response?.data || error.message);
+    logger.error(`Error obteniendo asociaciones para el Line Item ${lineItemId} hacia ${toObjectType}:`, error);
     throw error;
   }
 }
@@ -523,7 +524,7 @@ async function disassociateContactFromCompany(contactId, companyId) {
     await hsClient.delete(`/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`);
     return true;
   } catch (error) {
-    console.error(`Error desasociando Contacto ${contactId} de Empresa ${companyId}:`, error.response?.data || error.message);
+    logger.error(`Error desasociando Contacto ${contactId} de Empresa ${companyId}:`, error);
     throw error;
   }
 }
@@ -534,7 +535,7 @@ async function updateProduct(productId, properties) {
     const response = await hsClient.patch(`/crm/v3/objects/products/${productId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(`Error actualizando producto ${productId} en HubSpot:`, error.response?.data || error.message);
+    logger.error(`Error actualizando producto ${productId} en HubSpot:`, error);
     throw error;
   }
 }

@@ -1,8 +1,9 @@
 const testSyncService = require('../services/test-sync.service');
+const logger = require('../lib/logger.lib');
 
 async function syncCustomers(request, reply) {
   try {
-    console.log('[Controller] Petición de sincronización (QB -> HS) recibida');
+    logger.info('[Controller] Petición de sincronización (QB -> HS) recibida');
     
     // Delegamos la lógica pesada al servicio
     const resultados = await testSyncService.executeSync();
@@ -17,7 +18,7 @@ async function syncCustomers(request, reply) {
     });
 
   } catch (error) {
-    console.error('[Controller] Error crítico en la petición:', error);
+    logger.error('[Controller] Error crítico en la petición:', error);
     return reply.status(500).send({ error: 'Fallo interno durante la sincronización.' });
   }
 }

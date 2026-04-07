@@ -19,7 +19,7 @@ async function runSequentially(id, taskFunction) {
             // Ejecutamos la tarea actual y RETORNAMOS su valor
             return await taskFunction();
         } catch (error) {
-            console.error(`❌ Error en tarea secuencial para ID ${idStr}:`, error.message);
+            logger.error(`❌ Error en tarea secuencial para ID ${idStr}:`, error);
             throw error; // Re-lanzamos para que el llamador sepa que falló
         } finally {
             // 3. Limpieza: Si somos la última tarea en la fila, quitamos el candado

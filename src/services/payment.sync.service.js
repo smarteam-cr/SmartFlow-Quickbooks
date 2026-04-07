@@ -1,16 +1,15 @@
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
-
+const logger = require('../lib/logger.lib');
 const mutex = require('../utils/mutex.util');
 
 /**
  * Orquestador principal para sincronizar pagos de QuickBooks a HubSpot
- * @param {string} paymentId - El ID del pago proveniente del webhook de QuickBooks
  */
 async function _internalProcessQuickbooksPayment(paymentId) {
-    try {
-        console.log(`\n💰 [Pagos] Iniciando sincronización para el Payment ID de QB: ${paymentId}`);
+    logger.info(`[Sync] Procesando Pago QB ID: ${paymentId}`, { source: 'QUICKBOOKS', entity: 'payment', entityId: paymentId });
 
+    try {
         // 1. Obtener los detalles del pago desde QuickBooks
         const paymentData = await quickbooksClient.getPaymentDetails(paymentId);
         
@@ -18,7 +17,6 @@ async function _internalProcessQuickbooksPayment(paymentId) {
         let qboInvoiceId = null;
         if (paymentData.Line && paymentData.Line.length > 0) {
             for (const line of paymentData.Line) {
-                // Buscamos dentro de las transacciones vinculadas (LinkedTxn) la que sea de tipo Invoice
                 const linkedTxn = line.LinkedTxn.find(txn => txn.TxnType === 'Invoice');
                 if (linkedTxn) {
                     qboInvoiceId = linkedTxn.TxnId;
@@ -28,46 +26,42 @@ async function _internalProcessQuickbooksPayment(paymentId) {
         }
 
         if (!qboInvoiceId) {
-            console.log(`[Pagos] ⚠️ El pago ${paymentId} no está vinculado a ninguna factura. Omitiendo sincronización.`);
+            logger.info(`[Pagos] ⚠️ El pago ${paymentId} no está vinculado a ninguna factura. Omitiendo.`);
             return;
         }
 
-        console.log(`[Pagos] Pago asociado a la Factura de QB ID: ${qboInvoiceId}. Consultando saldos...`);
+        logger.info(`[Pagos] Pago asociado a la Factura de QB ID: ${qboInvoiceId}. Consultando saldos...`);
 
-        // 3. Consultar la factura original en QuickBooks para ver su saldo real
+        // 3. Consultar la factura original en QuickBooks
         const qboInvoice = await quickbooksClient.getInvoice(qboInvoiceId);
         
-        // Calculamos cuánto se ha pagado en total restando el saldo actual del monto total
         const amountPaid = qboInvoice.TotalAmt - qboInvoice.Balance;
         const remainingBalance = qboInvoice.Balance;
 
-        // 4. Buscar la factura en HubSpot usando nuestra propiedad ancla
+        // 4. Buscar la factura en HubSpot
         const hsInvoice = await hubspotClient.searchInvoiceByCustomProperty('id_factura_quickbooks', qboInvoiceId);
 
         if (!hsInvoice) {
-            console.error(`[Pagos] ❌ Error: No se encontró en HubSpot ninguna factura con ID de QBO: ${qboInvoiceId}`);
+            logger.error(`[Pagos] ❌ No se encontró en HubSpot factura con ID QB: ${qboInvoiceId}`);
             return;
         }
 
         // --- DEEP COMPARE PARA PAGOS ---
-        // Verificamos si los valores en HubSpot ya son iguales a los de QuickBooks
         if (
             hsInvoice.properties.importe_pagado_qb === amountPaid.toString() &&
             hsInvoice.properties.saldo_pendiente_qb === remainingBalance.toString()
         ) {
-            console.log(`[Pagos] ⏩ Los saldos en HubSpot ya están actualizados. Omitiendo PATCH redundante.`);
+            logger.info(`[Pagos] ⏩ Los saldos en HubSpot ya están actualizados. Omitiendo.`);
             return;
         }
 
-        console.log(`[Pagos] Factura encontrada en HubSpot (ID: ${hsInvoice.id}). Preparando actualización...`);
+        logger.info(`[Pagos] Factura HS ${hsInvoice.id} encontrada. Preparando actualización...`);
 
-      // 5. Preparar el payload para actualizar HubSpot
         const propertiesToUpdate = {
             importe_pagado_qb: amountPaid.toString(),
             saldo_pendiente_qb: remainingBalance.toString()
         };
 
-        // Lógica del semáforo: Actualizamos nuestro estado personalizado
         if (remainingBalance === 0) {
             propertiesToUpdate.estado_de_factura_qb = 'Pagada'; 
         } else if (amountPaid > 0) {
@@ -76,13 +70,13 @@ async function _internalProcessQuickbooksPayment(paymentId) {
             propertiesToUpdate.estado_de_factura_qb = 'Abierta';
         }
 
-        // 6. Enviar el PATCH a HubSpot para actualizar la factura
+        // 6. Enviar el PATCH a HubSpot
         await hubspotClient.updateInvoice(hsInvoice.id, propertiesToUpdate);
 
-        console.log(`[Pagos] ✅ Éxito: Factura ${hsInvoice.id} en HubSpot actualizada.`);
+        logger.info(`[Pagos] ✅ Factura HS ${hsInvoice.id} actualizada con éxito.`);
 
     } catch (error) {
-        console.error(`[Pagos] ❌ Error crítico procesando el pago ${paymentId}:`, error.message);
+        logger.error(`[Pagos] ❌ Error crítico procesando pago QB ${paymentId}:`, error);
     }
 }
 

@@ -1,18 +1,18 @@
 const config = require("../../config");
 const axios = require("axios");
 const authService = require("../../services/auth.service");
+const logger = require("../../lib/logger.lib");
 const { DEFAULT_TENANT_ID } = require("../../config/constants");
 
 /**
  * Instancia centralizada de Axios para QuickBooks.
- * Nota: El baseURL no incluye el realmId porque este variará por tenant (V2.0).
  */
 const qbClient = axios.create({
-  baseURL: config.quickbooks.baseUrl, // https://sandbox-quickbooks.api.intuit.com/v3/company
+  baseURL: config.quickbooks.baseUrl,
   headers: {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'Accept-Encoding': 'identity' // Evita el error "incorrect header check" forzando una respuesta sin compresión
+    'Accept-Encoding': 'identity'
   }
 });
 
@@ -31,29 +31,21 @@ qbClient.interceptors.request.use(async (reqConfig) => {
 
 /**
  * Interceptor de Respuesta: Maneja errores 401 renovando el token automáticamente.
- * Implementa el reintento de la petición fallida.
  */
 qbClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    // Si recibimos un 401 y no hemos reintentado ya esta petición...
     if (error.response && error.response.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
-        console.log(`[QuickBooksClient] 401 Unauthorized detectado. Iniciando refresh para ${DEFAULT_TENANT_ID}...`);
-        
-        // Delegamos la renovación al servicio de autenticación (que tiene el Mutex)
+        logger.info(`[QuickBooksClient] 401 Unauthorized detectado. Iniciando refresh para ${DEFAULT_TENANT_ID}...`);
         const newAccessToken = await authService.refreshQuickBooksToken(DEFAULT_TENANT_ID);
-        
-        // Actualizamos la cabecera con el nuevo token
         originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`;
-
-        // Reintentamos la petición original
         return qbClient(originalRequest);
       } catch (refreshError) {
-        console.error('[QuickBooksClient] Falló el ciclo de autorrefresco:', refreshError.message);
+        logger.error('[QuickBooksClient] Falló el ciclo de autorrefresco:', refreshError);
         return Promise.reject(refreshError);
       }
     }
@@ -66,8 +58,6 @@ qbClient.interceptors.response.use(
  */
 async function getBaseResourceUrl() {
   const { realmId } = await authService.getQuickBooksConfig(DEFAULT_TENANT_ID);
-  // Dado que QB_SANDBOX_BASE_URL en el .env ya incluye /v3/company, 
-  // aquí solo necesitamos agregar el realmId.
   return `/${realmId}`;
 }
 
@@ -77,7 +67,8 @@ async function getPaymentDetails(paymentId) {
     const response = await qbClient.get(`${baseUrl}/payment/${paymentId}?minorversion=65`);
     return response.data.Payment;
   } catch (error) {
-    throw new Error(`Error obteniendo detalles del pago ${paymentId}: ${error.message}`);
+    logger.error(`Error obteniendo detalles del pago ${paymentId}:`, error);
+    throw error;
   }
 }
 
@@ -86,11 +77,10 @@ async function findCustomerByEmail(email) {
     const baseUrl = await getBaseResourceUrl();
     const query = `SELECT * FROM Customer WHERE PrimaryEmailAddr = '${email}'`;
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
-    
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
   } catch (error) {
-    console.error("Error buscando cliente en QuickBooks:", error.message);
+    logger.error("Error buscando cliente en QuickBooks por email:", error);
     throw error;
   }
 }
@@ -144,7 +134,7 @@ async function createCustomer(customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    console.error("Error creando cliente en QuickBooks:", error.message);
+    logger.error("Error creando cliente en QuickBooks:", error);
     throw error;
   }
 }
@@ -157,7 +147,7 @@ async function findCustomerByDisplayName(displayName) {
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
   } catch (error) {
-    console.error("Error buscando cliente por DisplayName:", error.message);
+    logger.error("Error buscando cliente por DisplayName:", error);
     throw error;
   }
 }
@@ -169,7 +159,7 @@ async function getAllCustomers() {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.Customer || [];
   } catch (error) {
-    console.error("Error obteniendo clientes de QuickBooks:", error.message);
+    logger.error("Error obteniendo clientes de QuickBooks:", error);
     throw error;
   }
 }
@@ -183,7 +173,7 @@ async function findItemByName(itemName) {
     const itemInfo = response.data.QueryResponse.Item;
     return (itemInfo && itemInfo.length > 0) ? itemInfo[0] : null;
   } catch (error) {
-    console.error("Error buscando Item por nombre:", error.message);
+    logger.error("Error buscando Item por nombre:", error);
     throw error;
   }
 }
@@ -194,7 +184,7 @@ async function createItem(itemData) {
     const response = await qbClient.post(`${baseUrl}/item?minorversion=65`, itemData);
     return response.data.Item;
   } catch (error) {
-    console.error("Error creando Item en QuickBooks:", error.message);
+    logger.error("Error creando Item en QuickBooks:", error);
     throw error;
   }
 }
@@ -205,7 +195,7 @@ async function getItemById(itemId) {
     const response = await qbClient.get(`${baseUrl}/item/${itemId}?minorversion=65`);
     return response.data.Item;
   } catch (error) {
-    console.error(`Error obteniendo Item ${itemId} en QuickBooks:`, error.message);
+    logger.error(`Error obteniendo Item ${itemId} en QuickBooks:`, error);
     throw error;
   }
 }
@@ -222,7 +212,7 @@ async function updateItem(itemId, syncToken, itemData) {
     const response = await qbClient.post(`${baseUrl}/item?minorversion=65`, payload);
     return response.data.Item;
   } catch (error) {
-    console.error(`Error actualizando Item ${itemId}:`, error.message);
+    logger.error(`Error actualizando Item ${itemId}:`, error);
     throw error;
   }
 }
@@ -233,7 +223,7 @@ async function createInvoice(invoicePayload) {
     const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, invoicePayload);
     return response.data.Invoice;
   } catch (error) {
-    console.error('Error creando Factura en QuickBooks:', error.message);
+    logger.error('Error creando Factura en QuickBooks:', error);
     throw error;
   }
 }
@@ -244,7 +234,7 @@ async function getInvoice(invoiceId) {
     const response = await qbClient.get(`${baseUrl}/invoice/${invoiceId}?minorversion=65`);
     return response.data.Invoice;
   } catch (error) {
-    console.error(`Error obteniendo la Factura ${invoiceId}:`, error.message);
+    logger.error(`Error obteniendo la Factura ${invoiceId}:`, error);
     throw error;
   }
 }
@@ -255,7 +245,7 @@ async function getCustomerById(customerId) {
     const response = await qbClient.get(`${baseUrl}/customer/${customerId}?minorversion=65`);
     return response.data.Customer;
   } catch (error) {
-    console.error(`Error obteniendo Customer ${customerId}:`, error.message);
+    logger.error(`Error obteniendo Customer ${customerId}:`, error);
     throw error;
   }
 }
@@ -312,7 +302,7 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    console.error(`Error actualizando cliente ${qbCustomerId}:`, error.message);
+    logger.error(`Error actualizando cliente ${qbCustomerId}:`, error);
     throw error;
   }
 }
@@ -329,7 +319,7 @@ async function updateInvoice(qbInvoiceId, syncToken, invoicePayload) {
     const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, payload);
     return response.data.Invoice;
   } catch (error) {
-    console.error(`Error actualizando factura ${qbInvoiceId}:`, error.message);
+    logger.error(`Error actualizando factura ${qbInvoiceId}:`, error);
     throw error;
   }
 }

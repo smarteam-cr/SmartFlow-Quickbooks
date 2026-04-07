@@ -1,6 +1,7 @@
 const axios = require('axios');
 const config = require('../config');
 const Tenant = require('../db/models/tenant.model');
+const logger = require('../lib/logger.lib');
 
 // Mutex para evitar renovaciones concurrentes de QuickBooks
 let qbRefreshPromise = null;
@@ -50,13 +51,13 @@ async function getQuickBooksConfig(tenantId) {
 async function refreshQuickBooksToken(tenantId) {
   // Si ya hay una renovación en curso para cualquier petición, esperamos a esa misma promesa
   if (qbRefreshPromise) {
-    console.log(`[AuthService] Refresh already in progress for ${tenantId}. Waiting...`);
+    logger.info(`[AuthService] Refresh already in progress for ${tenantId}. Waiting...`);
     return qbRefreshPromise;
   }
 
   qbRefreshPromise = (async () => {
     try {
-      console.log(`[AuthService] Starting QuickBooks token refresh for tenant: ${tenantId}`);
+      logger.info(`[AuthService] Starting QuickBooks token refresh for tenant: ${tenantId}`);
       
       const tenant = await Tenant.findOne({ tenantId });
       if (!tenant || !tenant.quickbooks?.refreshToken) {
@@ -96,11 +97,11 @@ async function refreshQuickBooksToken(tenantId) {
       tenant.quickbooks.refreshTokenExpiresAt = new Date(Date.now() + x_refresh_token_expires_in * 1000);
 
       await tenant.save();
-      console.log(`[AuthService] QuickBooks token refreshed successfully for ${tenantId}`);
+      logger.info(`[AuthService] QuickBooks token refreshed successfully for ${tenantId}`);
 
       return access_token;
     } catch (error) {
-      console.error(`[AuthService] Error refreshing QuickBooks token for ${tenantId}:`, error.response?.data || error.message);
+      logger.error(`[AuthService] Error refreshing QuickBooks token for ${tenantId}:`, error);
       throw error;
     } finally {
       // Liberar el bloqueo al terminar (éxito o error)

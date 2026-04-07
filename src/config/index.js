@@ -13,6 +13,9 @@ const config = {
     clientId: process.env.QB_CLIENT_ID,
     clientSecret: process.env.QB_CLIENT_SECRET,
   },
+  mongo: {
+    uri: process.env.MONGODB_URI,
+  },
   
 };
 

@@ -2,6 +2,7 @@ const config = require('./config');
 const app = require('./app');
 const connectDB = require('./db/database');
 const { startWorker } = require('./tasks/worker');
+const logger = require('./lib/logger.lib');
 
 const PORT = config.port;
 
@@ -10,9 +11,9 @@ const start = async () => {
     await connectDB();
     await startWorker();
     await app.listen({ port: PORT });
-    console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+    logger.info(`🚀 Servidor corriendo en http://localhost:${PORT}`);
   } catch (err) {
-    app.log.error(err);
+    logger.error('Error al iniciar el servidor:', err);
     process.exit(1);
   }
 };

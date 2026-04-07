@@ -3,6 +3,7 @@ const quickbooksClient = require('../integrations/quickbooks/quickbooks.client')
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const productSyncService = require('./product.sync.service');
 const invoiceSyncService = require('./invoice.sync.service');
+const logger = require('../lib/logger.lib');
 
 /**
  * Procesa el payload (cuerpo) del webhook que envía QuickBooks.
@@ -22,72 +23,65 @@ async function processPaymentNotification(payload) {
         // 1. Enrutador para Pagos (Lógica existente)
         if (evento.name === 'Payment' && evento.operation === 'Create') {
           const paymentId = evento.id;
-          console.log(`[Service] Procesando nuevo pago con ID: ${paymentId} para el cliente ${realmId}`);
+          logger.info(`[QB Webhook] Procesando nuevo pago ID: ${paymentId} para cliente: ${realmId}`, { source: 'QUICKBOOKS', entity: 'payment', entityId: paymentId });
 
-          // En la V1.0, el realmId viene en el webhook pero qbClient ya sabe resolverlo vía authService
           const detallesPago = await quickbooksClient.getPaymentDetails(paymentId);
 
-          console.log('[Service] ¡Pago extraído exitosamente de QuickBooks!');
-          console.log('Monto:', detallesPago.TotalAmt);
-          console.log('Cliente Ref:', detallesPago.CustomerRef);
+          logger.info('[QB Webhook] ¡Pago extraído exitosamente de QuickBooks!', { amount: detallesPago.TotalAmt, customerRef: detallesPago.CustomerRef });
         }
 
         // 2. Enrutador para Productos / Items (NUEVA LÓGICA TAREA 2.2)
         else if (evento.name === 'Item' && evento.operation === 'Create') {
           const qbItemId = evento.id;
-          console.log(`\n=== [Webhook] Procesando nuevo ITEM de QuickBooks ID: ${qbItemId} ===`);
+          logger.info(`[QB Webhook] Procesando nuevo ITEM ID: ${qbItemId}`, { source: 'QUICKBOOKS', entity: 'product', entityId: qbItemId });
           await productSyncService.syncProductFromQuickbooks(qbItemId);
-          console.log('=================================================');
         }
       }
     }
   } catch (error) {
-    console.error('[Service] Error procesando el webhook de QuickBooks:', error.message);
+    logger.error('[QB Webhook] Error procesando el webhook de QuickBooks:', error);
     throw error;
   }
 }
 
 async function processDealWebhook(dealId) {
   try {
-    console.log(`\n[Webhook Service] Iniciando procesamiento para el Negocio ID: ${dealId}`);
+    logger.info(`[HS Webhook] Iniciando procesamiento para Negocio ID: ${dealId}`, { source: 'HUBSPOT', entity: 'deal', entityId: dealId });
 
     const dealDetails = await hubspotClient.getDealDetails(dealId);
-    console.log(`[HubSpot] Negocio encontrado: ${dealDetails.properties.dealname} | Monto Total: $${dealDetails.properties.amount}`);
+    logger.info(`[HubSpot] Negocio encontrado: ${dealDetails.properties.dealname} | Monto Total: $${dealDetails.properties.amount}`);
 
     const lineItems = await hubspotClient.getLineItemsByDealId(dealId);
-    console.log(`[HubSpot] Se encontraron ${lineItems.length} productos (Line Items) asociados.`);
+    logger.info(`[HubSpot] Se encontraron ${lineItems.length} productos (Line Items) asociados.`);
 
     lineItems.forEach((item, index) => {
       const esGravable = item.properties.es_gravable === "true" ? "SÍ" : "NO";
-
-      console.log(`   ${index + 1}. Producto: ${item.properties.name} | Precio: $${item.properties.price} | Cantidad: ${item.properties.quantity} | ¿Lleva Impuesto?: ${esGravable}`);
+      logger.info(`   ${index + 1}. Producto: ${item.properties.name} | Precio: $${item.properties.price} | Cantidad: ${item.properties.quantity} | ¿Gravable?: ${esGravable}`);
     });
 
-    console.log(`\n[Workaround] Disparando sincronización de factura simulada...`);
+    logger.info(`[HS Webhook] Disparando sincronización de factura simulada...`);
 
-    // TODO: CAMBIAR ESTE ID EN CADA PRUEBA CLONANDO LA FACTURA EN HUBSPOT
     const idFacturaDePrueba = '545773692265';
 
     // 1. OBTENER CONTACTOS DE LA FACTURA
-    console.log(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);
+    logger.info(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);
     const associatedContacts = await hubspotClient.getInvoiceAssociations(idFacturaDePrueba, 'contacts');
-    console.log(`[HubSpot] Encontrados ${associatedContacts.length} contactos asociados a la factura.`);
+    logger.info(`[HubSpot] Encontrados ${associatedContacts.length} contactos asociados a la factura.`);
 
     // 2. ASOCIAR FACTURA AL NEGOCIO (CRM Association)
-    console.log(`[HubSpot] Asociando factura ${idFacturaDePrueba} con el Negocio ${dealId}...`);
+    logger.info(`[HubSpot] Asociando factura ${idFacturaDePrueba} con el Negocio ${dealId}...`);
     await hubspotClient.associateInvoiceToDeal(idFacturaDePrueba, dealId);
 
     // 3. ASOCIAR FACTURA A LOS CONTACTOS (Asegurar vínculo)
     for (const contactId of associatedContacts) {
-      console.log(`[HubSpot] Asegurando vínculo factura ${idFacturaDePrueba} <-> Contacto ${contactId}...`);
+      logger.info(`[HubSpot] Asegurando vínculo factura ${idFacturaDePrueba} <-> Contacto ${contactId}...`);
       await hubspotClient.associateInvoiceToContact(idFacturaDePrueba, contactId);
     }
 
     // 3. Sincronizar hacia QuickBooks (Background)
     invoiceSyncService.syncInvoiceToQuickbooks(idFacturaDePrueba).catch(err => {
-      console.error(`[Fallo en Segundo Plano] Error sincronizando la factura simulada ${idFacturaDePrueba}:`, err.message);
+      logger.error(`[Fallo en Segundo Plano] Error sincronizando factura simulada ${idFacturaDePrueba}:`, err);
     });
-    // ------------------------------------------
 
     return {
       success: true,
@@ -97,7 +91,7 @@ async function processDealWebhook(dealId) {
     };
 
   } catch (error) {
-    console.error(`[Webhook Service] Error procesando el negocio ${dealId}:`, error.message);
+    logger.error(`[HS Webhook] Error procesando el negocio ${dealId}:`, error);
     throw error;
   }
 }
@@ -107,11 +101,12 @@ async function processDealWebhook(dealId) {
  */
 async function processHubSpotInvoiceWebhook(objectId, subscriptionType, propertyName) {
   try {
-    console.log(`\n[HubSpot Webhook] Recibido evento ${subscriptionType} para Factura: ${objectId}`);
+    logger.info(`[HubSpot Webhook] Recibido evento ${subscriptionType} para Factura ID: ${objectId}`, { source: 'HUBSPOT', entity: 'invoice', entityId: objectId });
 
     // Evitamos bucles infinitos si el cambio es en estados que nosotros mismos actualizamos
     const propertiesToIgnore = ['id_factura_quickbooks', 'estado_de_factura_qb', 'importe_pagado_qb', 'saldo_pendiente_qb'];
     if (subscriptionType === 'object.propertyChange' && propertiesToIgnore.includes(propertyName)) {
+      logger.info(`[HubSpot Webhook] Cambio en propiedad ignorada (${propertyName}) para Factura ID: ${objectId}. Omitiendo.`);
       return;
     }
 
@@ -119,7 +114,7 @@ async function processHubSpotInvoiceWebhook(objectId, subscriptionType, property
     await invoiceSyncService.syncHubSpotInvoiceToQuickbooks(objectId);
 
   } catch (error) {
-    console.error(`[HubSpot Webhook] Error procesando factura ${objectId}:`, error.message);
+    logger.error(`[HubSpot Webhook] Error procesando factura ${objectId}:`, error);
   }
 }
 
@@ -129,24 +124,24 @@ async function processHubSpotInvoiceWebhook(objectId, subscriptionType, property
  */
 async function processHubSpotLineItemWebhook(lineItemId) {
   try {
-    console.log(`\n[HubSpot Webhook] Cambio detectado en Line Item: ${lineItemId}`);
+    logger.info(`[HubSpot Webhook] Cambio detectado en Line Item ID: ${lineItemId}`, { source: 'HUBSPOT', entity: 'line_item', entityId: lineItemId });
 
     // 1. Buscar a qué factura pertenece esta partida
     const associatedInvoices = await hubspotClient.getLineItemAssociations(lineItemId, 'invoices');
     
     if (associatedInvoices.length === 0) {
-      console.log(`ℹ️ El Line Item ${lineItemId} no está asociado a ninguna factura aún.`);
+      logger.info(`[HubSpot Webhook] El Line Item ${lineItemId} no está asociado a ninguna factura aún.`);
       return;
     }
 
     // 2. Refrescar cada factura asociada
     for (const invoiceId of associatedInvoices) {
-      console.log(`🔄 Refrescando Factura ${invoiceId} debido a cambio en sus ítems...`);
+      logger.info(`[HubSpot Webhook] Refrescando Factura ID: ${invoiceId} debido a cambio en Line Item: ${lineItemId}`);
       await invoiceSyncService.syncHubSpotInvoiceToQuickbooks(invoiceId);
     }
 
   } catch (error) {
-    console.error(`[HubSpot Webhook] Error procesando Line Item ${lineItemId}:`, error.message);
+    logger.error(`[HubSpot Webhook] Error procesando Line Item ${lineItemId}:`, error);
   }
 }
 

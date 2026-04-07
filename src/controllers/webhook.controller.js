@@ -1,9 +1,10 @@
 const jobService = require('../services/job.service');
+const logger = require('../lib/logger.lib');
 
 async function handleQuickBooksWebhook(request, reply) {
-  console.log('--- Webhook de QB recibido ---'); // Agrega esto para depurar
   const payload = request.body;
   try {
+    logger.info('--- Webhook de QB recibido ---');
 
     if (payload.eventNotifications) {
       for (const notification of payload.eventNotifications) {
@@ -23,13 +24,14 @@ async function handleQuickBooksWebhook(request, reply) {
           const validOps = ['Create', 'Update', 'Emailed'];
           
           if (internalEntity && validOps.includes(entity.operation)) {
-            await jobService.createJob({
+            const job = await jobService.createJob({
               source: 'QUICKBOOKS',
               entity: internalEntity,
               entityId: entity.id,
               eventType: `qb.${entity.name.toLowerCase()}.${entity.operation.toLowerCase()}`,
               payload: entity
             });
+            logger.info(`✅ Job creado en BD [${job._id}] para QB ${internalEntity} ID: ${entity.id}`);
           }
         }
       }
@@ -37,8 +39,7 @@ async function handleQuickBooksWebhook(request, reply) {
 
     return reply.status(200).send('OK');
   } catch (error) {
-    // Aquí implementaremos Winston más adelante
-    console.error('Error en controlador QB:', error);
+    logger.error('Error en controlador QB:', error);
     return reply.status(500).send('Error');
   }
 }
@@ -46,19 +47,20 @@ async function handleQuickBooksWebhook(request, reply) {
 async function handleHubSpotWebhook(request, reply) {
   try {
     const events = request.body;
+    logger.info(`Webhook de HubSpot recibido con ${events.length} eventos.`);
 
     for (const event of events) {
       const targetId = event.fromObjectId || event.objectId;
       
       if (!targetId) {
-        console.warn(`⚠️ Evento ${event.subscriptionType} ignorado por falta de ID.`);
+        logger.warn(`⚠️ Evento ${event.subscriptionType} ignorado por falta de ID.`, { event });
         continue;
       }
 
       const entityMap = {
         'contact.creation': 'contact',
         'contact.propertyChange': 'contact',
-        'contact.associationChange': 'contact', // Agregado para integridad
+        'contact.associationChange': 'contact',
         'company.creation': 'company',
         'company.propertyChange': 'company',
         'product.creation': 'product',
@@ -76,37 +78,39 @@ async function handleHubSpotWebhook(request, reply) {
         internalEntity = 'line_item';
       }
 
-      // Usamos tu validación exacta:
       if (internalEntity && targetId) {
-        // La clave aquí es pasar UN SOLO objeto a createJob
         const job = await jobService.createJob({
           source: 'HUBSPOT',
-          entity: internalEntity,        // Usamos tu variable internalEntity
+          entity: internalEntity,
           entityId: targetId.toString(),
           eventType: event.subscriptionType,
           payload: event
         });
 
-        console.log(`✅ Job creado en BD [${job._id}] para ${internalEntity} ID: ${targetId}`);
+        logger.info(`✅ Job creado en BD [${job._id}] para HubSpot ${internalEntity} ID: ${targetId}`);
       }
     }
 
     return reply.code(200).send({ status: 'success' });
   } catch (error) {
-    console.error('❌ Error en controlador HS:', error);
+    logger.error('❌ Error en controlador HS:', error);
     return reply.code(500).send({ status: 'error' });
   }
 }
 
-// Nota: handleHubspotDealWebhook se mantiene solo si es para disparos manuales/pruebas.
 async function handleHubspotDealWebhook(request, reply) {
   const { dealId } = request.body;
   if (!dealId) return reply.status(400).send({ error: 'Falta dealId' });
   
-  // Para pruebas manuales, llamamos al servicio directamente.
   const webhookService = require('../services/webhook.service');
-  const result = await webhookService.processDealWebhook(dealId);
-  return reply.status(200).send(result);
+  try {
+    logger.info(`Procesando dealId manual: ${dealId}`);
+    const result = await webhookService.processDealWebhook(dealId);
+    return reply.status(200).send(result);
+  } catch (error) {
+    logger.error(`Error procesando dealId manual: ${dealId}`, error);
+    return reply.status(500).send({ error: 'Internal Server Error' });
+  }
 }
 
 module.exports = { 
