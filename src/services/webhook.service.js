@@ -24,12 +24,12 @@ async function processPaymentNotification(payload) {
           const paymentId = evento.id;
           console.log(`[Service] Procesando nuevo pago con ID: ${paymentId} para el cliente ${realmId}`);
 
-          const accessToken = config.quickbooks.accessToken;
-          const detallesPago = await quickbooksClient.getPaymentDetails(realmId, paymentId, accessToken);
+          // En la V1.0, el realmId viene en el webhook pero qbClient ya sabe resolverlo vía authService
+          const detallesPago = await quickbooksClient.getPaymentDetails(paymentId);
 
           console.log('[Service] ¡Pago extraído exitosamente de QuickBooks!');
-          console.log('Monto:', detallesPago.Payment.TotalAmt);
-          console.log('Cliente Ref:', detallesPago.Payment);
+          console.log('Monto:', detallesPago.TotalAmt);
+          console.log('Cliente Ref:', detallesPago.CustomerRef);
         }
 
         // 2. Enrutador para Productos / Items (NUEVA LÓGICA TAREA 2.2)

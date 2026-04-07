@@ -1,26 +1,21 @@
 const mongoose = require('mongoose');
 
 const tenantSchema = new mongoose.Schema({
-  realmId: { 
+  tenantId: { 
     type: String, 
     required: true, 
-    unique: true 
+    unique: true,
+    index: true 
   },
-  accessToken: { 
-    type: String, 
-    required: true 
+  hubspot: {
+    accessToken: { type: String }
   },
-  refreshToken: { 
-    type: String, 
-    required: true 
-  },
-  tokenExpiresAt: { 
-    type: Date, 
-    required: true 
-  },
-  refreshTokenExpiresAt: { 
-    type: Date, 
-    required: true 
+  quickbooks: {
+    realmId: { type: String },
+    accessToken: { type: String },
+    refreshToken: { type: String },
+    tokenExpiresAt: { type: Date },
+    refreshTokenExpiresAt: { type: Date }
   }
 }, { 
   timestamps: true 

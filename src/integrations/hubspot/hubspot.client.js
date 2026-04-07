@@ -1,37 +1,37 @@
-const config = require("../../config");
 const axios = require("axios");
+const authService = require("../../services/auth.service");
+const { DEFAULT_TENANT_ID } = require("../../config/constants");
+
+// Instancia centralizada de Axios para HubSpot
+const hsClient = axios.create({
+  baseURL: "https://api.hubapi.com",
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+// Interceptor de Petición: Inyecta el token dinámicamente desde la base de datos
+hsClient.interceptors.request.use(async (reqConfig) => {
+  try {
+    const token = await authService.getHubSpotToken(DEFAULT_TENANT_ID);
+    reqConfig.headers.Authorization = `Bearer ${token}`;
+    return reqConfig;
+  } catch (error) {
+    return Promise.reject(error);
+  }
+});
 
 async function getContactDetails(contactId) {
   try {
-    // Le decimos a HubSpot qué propiedades específicas queremos que nos devuelva.
-    // Como mínimo necesitamos el email para buscar en QuickBooks.
     const properties = "email,firstname,lastname,company,phone,address,city,state,zip,country,id_usuario_quickbooks";
-
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=${properties}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}?properties=${properties}`);
     return response.data;
   } catch (error) {
-    // Si es un 404 (No encontrado), retornamos null en lugar de lanzar un error
     if (error.response && error.response.status === 404) {
-      console.warn(
-        `El contacto ${contactId} devolvió 404 en HubSpot (Posiblemente fue borrado).`,
-      );
+      console.warn(`El contacto ${contactId} devolvió 404 en HubSpot (Posiblemente fue borrado).`);
       return null;
     }
-
-    // Si es otro tipo de error (ej. token inválido o caída de servidor), sí lanzamos el error
-    console.error(
-      `Error crítico obteniendo el contacto ${contactId} de HubSpot:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error crítico obteniendo el contacto ${contactId} de HubSpot:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -43,24 +43,10 @@ async function updateContactProperty(contactId, qbId) {
         id_usuario_quickbooks: qbId.toString(),
       },
     };
-
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const response = await hsClient.patch(`/crm/v3/objects/contacts/${contactId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(
-      `Error actualizando el ID en HubSpot para el contacto ${contactId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error actualizando el ID en HubSpot para el contacto ${contactId}:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -70,22 +56,10 @@ async function updateCompanyProperty(companyId, qbId) {
     const payload = {
       properties: { id_usuario_quickbooks: qbId.toString() },
     };
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const response = await hsClient.patch(`/crm/v3/objects/companies/${companyId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(
-      `Error actualizando el ID en HubSpot para la empresa ${companyId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error actualizando el ID en HubSpot para la empresa ${companyId}:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -94,37 +68,20 @@ async function getAllContacts() {
   try {
     let allContacts = [];
     let after = undefined;
-
     console.log("Descargando contactos históricos de HubSpot...");
-
-    // Usamos un bucle do-while para la "paginación"
     do {
-      let url = `https://api.hubapi.com/crm/v3/objects/contacts?limit=35&properties=email,firstname,lastname,id_usuario_quickbooks`;
+      let url = `/crm/v3/objects/contacts?limit=35&properties=email,firstname,lastname,id_usuario_quickbooks`;
       if (after) {
-        url += `&after=${after}`; // Agregamos el cursor para la siguiente página
+        url += `&after=${after}`;
       }
-
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      // Sumamos los contactos de esta página a nuestra lista total
+      const response = await hsClient.get(url);
       allContacts = allContacts.concat(response.data.results);
-
-      // Verificamos si hay más páginas
       after = response.data.paging?.next?.after;
     } while (after);
-
     console.log(`Se descargaron ${allContacts.length} contactos de HubSpot.`);
     return allContacts;
   } catch (error) {
-    console.error(
-      "Error obteniendo todos los contactos de HubSpot:",
-      error.response?.data || error.message,
-    );
+    console.error("Error obteniendo todos los contactos de HubSpot:", error.response?.data || error.message);
     throw error;
   }
 }
@@ -132,22 +89,9 @@ async function getAllContacts() {
 async function batchCreateContacts(contacts) {
   try {
     const payload = { inputs: contacts };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/contacts/batch/create",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/contacts/batch/create", payload);
     return response.data;
   } catch (error) {
-    // El batch puede devolver 207 (multi-status) o 400 con errores parciales
-    // Si hay respuesta con data, la retornamos para que el servicio la analice
     if (error.response?.data) {
       return error.response.data;
     }
@@ -159,22 +103,10 @@ async function batchCreateContacts(contacts) {
 async function createCompany(properties) {
   try {
     const payload = { properties };
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/companies",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-    return response.data; // Retorna el objeto que incluye el ID generado
+    const response = await hsClient.post("/crm/v3/objects/companies", payload);
+    return response.data;
   } catch (error) {
-    console.error(
-      `Error creando la empresa en HubSpot:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error creando la empresa en HubSpot:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -186,55 +118,28 @@ async function createSingleContact(contactData, qbId) {
         firstname: contactData.firstname || "",
         lastname: contactData.lastname || "",
         email: contactData.email || "",
-        id_usuario_quickbooks: qbId ? qbId.toString() : "", // Guardamos el ID del Hijo
+        id_usuario_quickbooks: qbId ? qbId.toString() : "",
       },
     };
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/contacts",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const response = await hsClient.post("/crm/v3/objects/contacts", payload);
     return response.data;
   } catch (error) {
     if (error.response?.status === 409) {
-      console.warn(
-        `Aviso: El contacto ${contactData.email} ya existe en HubSpot.`,
-      );
+      console.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
       const existingId = error.response.data.message.match(/\d+/)[0];
       return { id: existingId };
     }
-    console.error(
-      "Error creando contacto en HubSpot:",
-      error.response?.data || error.message,
-    );
+    console.error("Error creando contacto en HubSpot:", error.response?.data || error.message);
     throw error;
   }
 }
 
 async function associateContactToCompany(contactId, companyId) {
   try {
-    // Tipo de asociación 279 o 1 es el identificador por defecto para Company -> Contact en HubSpot (Depende de la versión de portal, usaremos la sintaxis estándar de v3)
-    const response = await axios.put(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const response = await hsClient.put(`/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`, {});
     return response.data;
   } catch (error) {
-    console.error(
-      `Error asociando Contacto ${contactId} a Empresa ${companyId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error asociando Contacto ${contactId} a Empresa ${companyId}:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -242,40 +147,21 @@ async function associateContactToCompany(contactId, companyId) {
 async function searchCompanyByQbId(qbId) {
   try {
     const payload = {
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: "id_usuario_quickbooks",
-              operator: "EQ",
-              value: qbId.toString(),
-            },
-          ],
-        },
-      ],
+      filterGroups: [{
+        filters: [{
+          propertyName: "id_usuario_quickbooks",
+          operator: "EQ",
+          value: qbId.toString(),
+        }],
+      }],
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/companies/search",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
-    // Si encuentra la empresa, devuelve su ID de HubSpot. Si no, devuelve null.
+    const response = await hsClient.post("/crm/v3/objects/companies/search", payload);
     if (response.data.total > 0) {
       return response.data.results[0].id;
     }
     return null;
   } catch (error) {
-    console.error(
-      `Error buscando empresa con QB ID ${qbId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error buscando empresa con QB ID ${qbId}:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -284,60 +170,33 @@ async function getAllCompanies() {
   try {
     let allCompanies = [];
     let after = undefined;
-
     console.log("Descargando empresas de HubSpot...");
-
     do {
-      let url = `https://api.hubapi.com/crm/v3/objects/companies?limit=100&properties=name,domain,id_usuario_quickbooks`;
+      let url = `/crm/v3/objects/companies?limit=100&properties=name,domain,id_usuario_quickbooks`;
       if (after) {
         url += `&after=${after}`;
       }
-
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
+      const response = await hsClient.get(url);
       allCompanies = allCompanies.concat(response.data.results);
       after = response.data.paging?.next?.after;
     } while (after);
-
     console.log(`Se descargaron ${allCompanies.length} empresas de HubSpot.`);
     return allCompanies;
   } catch (error) {
-    console.error(
-      "Error obteniendo empresas de HubSpot:",
-      error.response?.data || error.message,
-    );
+    console.error("Error obteniendo empresas de HubSpot:", error.response?.data || error.message);
     throw error;
   }
 }
 
 async function getAssociatedContactIds(companyId) {
   try {
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
-    // La API retorna { results: [{ id: "contactId", type: "..." }, ...] }
+    const response = await hsClient.get(`/crm/v3/objects/companies/${companyId}/associations/contacts`);
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
-    // Si no tiene asociaciones, la API puede devolver un 404 o un array vacío
     if (error.response?.status === 404) {
       return [];
     }
-    console.error(
-      `Error obteniendo asociaciones de la empresa ${companyId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error obteniendo asociaciones de la empresa ${companyId}:`, error.response?.data || error.message);
     throw error;
   }
 }
@@ -346,215 +205,95 @@ async function getAllContactsWithCompanyAssociations() {
   try {
     let allContacts = [];
     let after = undefined;
-
-    console.log(
-      "Descargando contactos de HubSpot con sus asociaciones (Padres)...",
-    );
-
+    console.log("Descargando contactos de HubSpot con sus asociaciones (Padres)...");
     do {
-      // El secreto está en el parámetro &associations=company
-      let url = `https://api.hubapi.com/crm/v3/objects/contacts?limit=100&properties=email,firstname,lastname,company&associations=company`;
+      let url = `/crm/v3/objects/contacts?limit=100&properties=email,firstname,lastname,company&associations=company`;
       if (after) {
         url += `&after=${after}`;
       }
-
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
+      const response = await hsClient.get(url);
       allContacts = allContacts.concat(response.data.results);
       after = response.data.paging?.next?.after;
     } while (after);
-
-    console.log(
-      `Se descargaron ${allContacts.length} contactos con asociaciones.`,
-    );
+    console.log(`Se descargaron ${allContacts.length} contactos con asociaciones.`);
     return allContacts;
   } catch (error) {
-    console.error(
-      "Error obteniendo contactos con asociaciones:",
-      error.response?.data || error.message,
-    );
+    console.error("Error obteniendo contactos con asociaciones:", error.response?.data || error.message);
     throw error;
   }
 }
 
 async function getCompanyDetails(companyId) {
   try {
-    const properties = [
-      "name",
-      "nit",
-      "phone",
-      "domain",
-      "address",
-      "city",
-      "country",
-      "id_usuario_quickbooks"
-    ].join(",");
-    
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}?properties=${properties}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const properties = ["name","nit","phone","domain","address","city","country","id_usuario_quickbooks"].join(",");
+    const response = await hsClient.get(`/crm/v3/objects/companies/${companyId}?properties=${properties}`);
     return response.data;
   } catch (error) {
     if (error.response?.status === 404) return null;
-    console.error(
-      `Error obteniendo detalles de empresa ${companyId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error obteniendo detalles de empresa ${companyId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
 async function getDealDetails(dealId) {
   try {
-    // Pedimos propiedades clave: nombre del negocio, monto total y etapa
     const properties = "dealname,amount,dealstage";
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/deals/${dealId}?properties=${properties}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const response = await hsClient.get(`/crm/v3/objects/deals/${dealId}?properties=${properties}`);
     return response.data;
   } catch (error) {
-    console.error(
-      `Error obteniendo el negocio ${dealId} de HubSpot:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error obteniendo el negocio ${dealId} de HubSpot:`, error.response?.data || error.message);
     throw error;
   }
 }
 
 async function getLineItemsByDealId(dealId) {
   try {
-    // 1. Obtener los IDs de los "Line Items" asociados a este Negocio
-    const assocResponse = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/deals/${dealId}/associations/line_items`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+    const assocResponse = await hsClient.get(`/crm/v3/objects/deals/${dealId}/associations/line_items`);
+    const lineItemIds = assocResponse.data.results.map((assoc) => ({ id: assoc.id }));
+    if (lineItemIds.length === 0) return [];
 
-    // Mapeamos para el formato que pide el batch read de HubSpot
-    const lineItemIds = assocResponse.data.results.map((assoc) => ({
-      id: assoc.id,
-    }));
-
-    if (lineItemIds.length === 0) {
-      return []; // El negocio no tiene productos asociados
-    }
-
-    // 2. Obtener los detalles reales de esos productos (nombre, precio, cantidad)
     const batchPayload = {
       inputs: lineItemIds,
-      properties: ["name", "price", "quantity", "hs_sku", "description","es_gravable"],
+      properties: ["name", "price", "quantity", "hs_sku", "description", "es_gravable"],
     };
-
-    const detailsResponse = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/line_items/batch/read",
-      batchPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const detailsResponse = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
     return detailsResponse.data.results;
   } catch (error) {
     if (error.response?.status === 404) {
-      console.warn(
-        `El negocio ${dealId} no tiene line items asociados o no existen.`,
-      );
+      console.warn(`El negocio ${dealId} no tiene line items asociados o no existen.`);
       return [];
     }
-    console.error(
-      `Error obteniendo line items para el negocio ${dealId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error obteniendo line items para el negocio ${dealId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
 async function getProductDetails(productId) {
   try {
-    // Definimos las propiedades del producto necesarias para crear el Item en QuickBooks
     const properties = "name,price,description,hs_sku,id_producto_quickbooks,es_gravable,hs_price_usd";
-
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/products/${productId}?properties=${properties}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const response = await hsClient.get(`/crm/v3/objects/products/${productId}?properties=${properties}`);
     return response.data;
   } catch (error) {
     if (error.response && error.response.status === 404) {
-      console.warn(
-        `El producto ${productId} devolvió 404 en HubSpot.`,
-      );
+      console.warn(`El producto ${productId} devolvió 404 en HubSpot.`);
       return null;
     }
-
-    console.error(
-      `Error obteniendo el producto ${productId} de HubSpot:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error obteniendo el producto ${productId} de HubSpot:`, error.response?.data || error.message);
     throw error;
   }
 }
 
 async function updateProductProperty(productId, qbId) {
   try {
-    const payload = {
-      properties: {
-        id_producto_quickbooks: qbId.toString(),
-      },
-    };
-
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/products/${productId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
-
+    const payload = { properties: { id_producto_quickbooks: qbId.toString() } };
+    const response = await hsClient.patch(`/crm/v3/objects/products/${productId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(
-      `Error actualizando el ID en HubSpot para el producto ${productId}:`,
-      error.response?.data || error.message,
-    );
+    console.error(`Error actualizando el ID en HubSpot para el producto ${productId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-// Crea un nuevo producto en HubSpot.
 async function createProduct(productData) {
   try {
     const payload = {
@@ -567,18 +306,7 @@ async function createProduct(productData) {
         id_producto_quickbooks: productData.qbId.toString()
       }
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/products",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/products", payload);
     return response.data;
   } catch (error) {
     console.error("Error creando producto en HubSpot:", error.response?.data || error.message);
@@ -586,10 +314,6 @@ async function createProduct(productData) {
   }
 }
 
-/**
- * Busca un producto en HubSpot utilizando el ID de QuickBooks.
- * Vital para evitar bucles infinitos en la sincronización bidireccional.
- */
 async function searchProductByQbId(qbId) {
   try {
     const payload = {
@@ -601,20 +325,9 @@ async function searchProductByQbId(qbId) {
         }]
       }]
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/products/search",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/products/search", payload);
     if (response.data.total > 0) {
-      return response.data.results[0]; // Retorna el producto encontrado
+      return response.data.results[0];
     }
     return null;
   } catch (error) {
@@ -623,23 +336,10 @@ async function searchProductByQbId(qbId) {
   }
 }
 
-/**
- * Obtiene los detalles de una Factura (Invoice) en HubSpot.
- */
 async function getInvoiceDetails(invoiceId) {
   try {
-    // Propiedades: monto total, estado, y nuestra propiedad personalizada
     const properties = "hs_invoice_total,hs_status,hs_title,id_factura_quickbooks,hs_invoice_date,hs_due_date";
-    
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await hsClient.get(`/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`);
     return response.data;
   } catch (error) {
     if (error.response?.status === 404) {
@@ -651,57 +351,21 @@ async function getInvoiceDetails(invoiceId) {
   }
 }
 
-/**
- * Obtiene las asociaciones de una Factura (Invoice).
- * Puede buscar contactos, empresas o line_items asociados.
- * @param {string} invoiceId - ID de la factura.
- * @param {string} toObjectType - 'contacts', 'companies', o 'line_items'.
- */
 async function getInvoiceAssociations(invoiceId, toObjectType) {
   try {
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/${toObjectType}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    
-    // Retornamos un arreglo plano con los IDs encontrados
+    const response = await hsClient.get(`/crm/v3/objects/invoices/${invoiceId}/associations/${toObjectType}`);
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
-    if (error.response?.status === 404) {
-      return []; // No tiene asociaciones de este tipo
-    }
+    if (error.response?.status === 404) return [];
     console.error(`Error obteniendo asociaciones de ${toObjectType} para la factura ${invoiceId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-/**
- * Actualiza la factura en HubSpot para guardar el ID generado por QuickBooks.
- */
 async function updateInvoiceProperty(invoiceId, qbInvoiceId) {
   try {
-    const payload = {
-      properties: {
-        id_factura_quickbooks: qbInvoiceId.toString(),
-      },
-    };
-
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const payload = { properties: { id_factura_quickbooks: qbInvoiceId.toString() } };
+    const response = await hsClient.patch(`/crm/v3/objects/invoices/${invoiceId}`, payload);
     return response.data;
   } catch (error) {
     console.error(`Error actualizando el ID en HubSpot para la factura ${invoiceId}:`, error.response?.data || error.message);
@@ -709,31 +373,14 @@ async function updateInvoiceProperty(invoiceId, qbInvoiceId) {
   }
 }
 
-/**
- * Obtiene los detalles completos de múltiples Line Items por sus IDs.
- * @param {Array<string>} lineItemIds - Arreglo de IDs de Line Items.
- */
 async function getLineItemsDetails(lineItemIds) {
   if (!lineItemIds || lineItemIds.length === 0) return [];
-
   try {
     const batchPayload = {
       inputs: lineItemIds.map(id => ({ id })),
-      // Pedimos las propiedades vitales, incluyendo nuestra ancla de QuickBooks
       properties: ["name", "price", "quantity", "hs_sku", "description", "id_producto_quickbooks", "es_gravable"]
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/line_items/batch/read",
-      batchPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
     return response.data.results;
   } catch (error) {
     console.error("Error obteniendo detalles de los Line Items:", error.response?.data || error.message);
@@ -741,128 +388,54 @@ async function getLineItemsDetails(lineItemIds) {
   }
 }
 
-/**
- * Busca una factura en HubSpot utilizando una propiedad personalizada (ej. id_factura_quickbooks).
- * Vital para encontrar a qué factura pertenece un pago entrante.
- * @param {string} propertyName - Nombre interno de la propiedad en HubSpot.
- * @param {string} value - Valor a buscar (El ID de la factura en QuickBooks).
- */
 async function searchInvoiceByCustomProperty(propertyName, value) {
   try {
     const payload = {
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: propertyName,
-              operator: "EQ",
-              value: value.toString(),
-            },
-          ],
-        },
-      ],
+      filterGroups: [{
+        filters: [{
+          propertyName: propertyName,
+          operator: "EQ",
+          value: value.toString(),
+        }],
+      }],
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/invoices/search",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/invoices/search", payload);
     if (response.data.total > 0) {
-      return response.data.results[0]; // Retorna la factura encontrada
+      return response.data.results[0];
     }
     return null;
   } catch (error) {
-    console.error(
-      `Error buscando factura en HubSpot con ${propertyName} = ${value}:`,
-      error.response?.data || error.message
-    );
+    console.error(`Error buscando factura en HubSpot con ${propertyName} = ${value}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-/**
- * Actualiza múltiples propiedades de una factura en HubSpot.
- * Se usará para inyectar el hs_amount_paid y cambiar el estado de la factura a Pagado.
- * @param {string} invoiceId - ID de la factura en HubSpot.
- * @param {object} propertiesToUpdate - Objeto llave:valor con las propiedades a actualizar.
- */
 async function updateInvoice(invoiceId, propertiesToUpdate) {
   try {
-    const payload = {
-      properties: propertiesToUpdate,
-    };
-
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const payload = { properties: propertiesToUpdate };
+    const response = await hsClient.patch(`/crm/v3/objects/invoices/${invoiceId}`, payload);
     return response.data;
   } catch (error) {
-    console.error(
-      `Error actualizando propiedades (pagos) en la factura ${invoiceId}:`,
-      error.response?.data || error.message
-    );
+    console.error(`Error actualizando propiedades en la factura ${invoiceId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-/**
- * Obtiene los IDs de las empresas asociadas a un contacto.
- * @param {string} contactId - ID del contacto en HubSpot.
- */
 async function getContactAssociatedCompanyIds(contactId) {
   try {
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}/associations/companies`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    
-    // Retornamos un arreglo plano con los IDs de las empresas
+    const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}/associations/companies`);
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
-    if (error.response?.status === 404) {
-      return [];
-    }
+    if (error.response?.status === 404) return [];
     console.error(`Error obteniendo asociaciones de empresas para el contacto ${contactId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-/**
- * Actualiza múltiples propiedades de un contacto en HubSpot.
- */
 async function updateContact(contactId, properties) {
   try {
     const payload = { properties };
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await hsClient.patch(`/crm/v3/objects/contacts/${contactId}`, payload);
     return response.data;
   } catch (error) {
     console.error(`Error actualizando contacto ${contactId} en HubSpot:`, error.response?.data || error.message);
@@ -870,22 +443,10 @@ async function updateContact(contactId, properties) {
   }
 }
 
-/**
- * Actualiza múltiples propiedades de una empresa en HubSpot.
- */
 async function updateCompany(companyId, properties) {
   try {
     const payload = { properties };
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await hsClient.patch(`/crm/v3/objects/companies/${companyId}`, payload);
     return response.data;
   } catch (error) {
     console.error(`Error actualizando empresa ${companyId} en HubSpot:`, error.response?.data || error.message);
@@ -893,9 +454,6 @@ async function updateCompany(companyId, properties) {
   }
 }
 
-/**
- * Busca un contacto en HubSpot utilizando el ID de QuickBooks.
- */
 async function searchContactByQbId(qbId) {
   try {
     const payload = {
@@ -907,20 +465,9 @@ async function searchContactByQbId(qbId) {
         }]
       }]
     };
-
-    const response = await axios.post(
-      "https://api.hubapi.com/crm/v3/objects/contacts/search",
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
+    const response = await hsClient.post("/crm/v3/objects/contacts/search", payload);
     if (response.data.total > 0) {
-      return response.data.results[0]; 
+      return response.data.results[0];
     }
     return null;
   } catch (error) {
@@ -929,47 +476,20 @@ async function searchContactByQbId(qbId) {
   }
 }
 
-/**
- * Obtiene los IDs de los contactos asociados a un negocio (Deal).
- * @param {string} dealId - ID del negocio en HubSpot.
- */
 async function getDealAssociatedContacts(dealId) {
   try {
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/deals/${dealId}/associations/contacts`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    
+    const response = await hsClient.get(`/crm/v3/objects/deals/${dealId}/associations/contacts`);
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
-    if (error.response?.status === 404) {
-      return [];
-    }
+    if (error.response?.status === 404) return [];
     console.error(`Error obteniendo asociaciones de contactos para el negocio ${dealId}:`, error.response?.data || error.message);
     throw error;
   }
 }
 
-/**
- * Asocia una factura a un contacto.
- */
 async function associateInvoiceToContact(invoiceId, contactId) {
   try {
-    await axios.put(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/contacts/${contactId}/invoice_to_contact`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    await hsClient.put(`/crm/v3/objects/invoices/${invoiceId}/associations/contacts/${contactId}/invoice_to_contact`, {});
     return true;
   } catch (error) {
     console.error(`Error asociando Factura ${invoiceId} a Contacto ${contactId}:`, error.response?.data || error.message);
@@ -977,21 +497,9 @@ async function associateInvoiceToContact(invoiceId, contactId) {
   }
 }
 
-/**
- * Asocia una factura a un negocio (Deal).
- */
 async function associateInvoiceToDeal(invoiceId, dealId) {
   try {
-    await axios.put(
-      `https://api.hubapi.com/crm/v3/objects/invoices/${invoiceId}/associations/deals/${dealId}/invoice_to_deal`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    await hsClient.put(`/crm/v3/objects/invoices/${invoiceId}/associations/deals/${dealId}/invoice_to_deal`, {});
     return true;
   } catch (error) {
     console.error(`Error asociando Factura ${invoiceId} a Negocio ${dealId}:`, error.response?.data || error.message);
@@ -999,28 +507,12 @@ async function associateInvoiceToDeal(invoiceId, dealId) {
   }
 }
 
-/**
- * Obtiene las asociaciones de un Line Item (Partida).
- * @param {string} lineItemId - ID de la partida en HubSpot.
- * @param {string} toObjectType - Tipo de objeto destino (ej: 'invoices').
- */
 async function getLineItemAssociations(lineItemId, toObjectType) {
   try {
-    const response = await axios.get(
-      `https://api.hubapi.com/crm/v3/objects/line_items/${lineItemId}/associations/${toObjectType}`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-    
+    const response = await hsClient.get(`/crm/v3/objects/line_items/${lineItemId}/associations/${toObjectType}`);
     return response.data.results.map((assoc) => assoc.id);
   } catch (error) {
-    if (error.response?.status === 404) {
-      return [];
-    }
+    if (error.response?.status === 404) return [];
     console.error(`Error obteniendo asociaciones para el Line Item ${lineItemId} hacia ${toObjectType}:`, error.response?.data || error.message);
     throw error;
   }
@@ -1028,16 +520,7 @@ async function getLineItemAssociations(lineItemId, toObjectType) {
 
 async function disassociateContactFromCompany(contactId, companyId) {
   try {
-    // Usamos el endpoint de eliminación de asociaciones
-    await axios.delete(
-      `https://api.hubapi.com/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    await hsClient.delete(`/crm/v3/objects/companies/${companyId}/associations/contacts/${contactId}/company_to_contact`);
     return true;
   } catch (error) {
     console.error(`Error desasociando Contacto ${contactId} de Empresa ${companyId}:`, error.response?.data || error.message);
@@ -1045,22 +528,10 @@ async function disassociateContactFromCompany(contactId, companyId) {
   }
 }
 
-/**
- * Actualiza propiedades de un producto en HubSpot.
- */
 async function updateProduct(productId, properties) {
   try {
     const payload = { properties };
-    const response = await axios.patch(
-      `https://api.hubapi.com/crm/v3/objects/products/${productId}`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${config.hubspot.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await hsClient.patch(`/crm/v3/objects/products/${productId}`, payload);
     return response.data;
   } catch (error) {
     console.error(`Error actualizando producto ${productId} en HubSpot:`, error.response?.data || error.message);
