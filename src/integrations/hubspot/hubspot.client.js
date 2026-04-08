@@ -116,9 +116,7 @@ async function createSingleContact(contactData, qbId) {
   try {
     const payload = {
       properties: {
-        firstname: contactData.firstname || "",
-        lastname: contactData.lastname || "",
-        email: contactData.email || "",
+        ...contactData,
         id_usuario_quickbooks: qbId ? qbId.toString() : "",
       },
     };
@@ -127,7 +125,10 @@ async function createSingleContact(contactData, qbId) {
   } catch (error) {
     if (error.response?.status === 409) {
       logger.warn(`Aviso: El contacto ${contactData.email} ya existe en HubSpot.`);
-      const existingId = error.response.data.message.match(/\d+/)[0];
+      // Intentamos extraer el ID del mensaje de error de conflicto de HubSpot
+      const message = error.response.data.message;
+      const match = message.match(/ID: (\d+)/) || message.match(/Existing ID: (\d+)/);
+      const existingId = match ? match[1] : null;
       return { id: existingId };
     }
     logger.error("Error creando contacto en HubSpot:", error);
