@@ -24,7 +24,7 @@ hsClient.interceptors.request.use(async (reqConfig) => {
 
 async function getContactDetails(contactId) {
   try {
-    const properties = "email,firstname,lastname,company,phone,address,city,state,zip,country,id_usuario_quickbooks";
+    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks";
     const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}?properties=${properties}`);
     return response.data;
   } catch (error) {
@@ -227,7 +227,7 @@ async function getAllContactsWithCompanyAssociations() {
 
 async function getCompanyDetails(companyId) {
   try {
-    const properties = ["name","nit","phone","domain","address","city","country","id_usuario_quickbooks"].join(",");
+    const properties = ["name","nit","phone","domain","address","city","state","zip","country","id_usuario_quickbooks"].join(",");
     const response = await hsClient.get(`/crm/v3/objects/companies/${companyId}?properties=${properties}`);
     return response.data;
   } catch (error) {

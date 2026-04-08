@@ -110,11 +110,14 @@ async function createCustomer(customerData) {
     if (customerData.companyName) payload.CompanyName = customerData.companyName;
     if (customerData.email) payload.PrimaryEmailAddr = { Address: customerData.email };
     if (customerData.phone) payload.PrimaryPhone = { FreeFormNumber: customerData.phone };
-    if (customerData.address || customerData.city || customerData.country) {
+    if (customerData.mobile) payload.Mobile = { FreeFormNumber: customerData.mobile };
+    if (customerData.address || customerData.city || customerData.country || customerData.state || customerData.zip) {
       payload.BillAddr = {};
       if (customerData.address) payload.BillAddr.Line1 = customerData.address;
       if (customerData.city) payload.BillAddr.City = customerData.city;
       if (customerData.country) payload.BillAddr.Country = customerData.country;
+      if (customerData.state) payload.BillAddr.CountrySubDivisionCode = customerData.state;
+      if (customerData.zip) payload.BillAddr.PostalCode = customerData.zip;
     }
     if (customerData.parentRef) {
       payload.ParentRef = { value: customerData.parentRef };
@@ -125,10 +128,6 @@ async function createCustomer(customerData) {
       let uri = customerData.domain;
       if (uri && !uri.startsWith('http')) uri = `https://${uri}`;
       payload.WebAddr = { URI: uri };
-    }
-    if (customerData.hsId) {
-      const prefix = isCompany ? "HS_COMPANY_ID" : "HS_CONTACT_ID";
-      payload.Notes = `${prefix}:${customerData.hsId}`;
     }
 
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
@@ -278,6 +277,7 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     if (customerData.companyName) payload.CompanyName = customerData.companyName;
     if (customerData.email) payload.PrimaryEmailAddr = { Address: customerData.email };
     if (customerData.phone) payload.PrimaryPhone = { FreeFormNumber: customerData.phone };
+    if (customerData.mobile) payload.Mobile = { FreeFormNumber: customerData.mobile };
     if (customerData.address || customerData.city || customerData.country || customerData.state || customerData.zip) {
       payload.BillAddr = {};
       if (customerData.address) payload.BillAddr.Line1 = customerData.address;

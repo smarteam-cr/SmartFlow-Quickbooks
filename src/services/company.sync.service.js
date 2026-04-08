@@ -26,6 +26,8 @@ async function _internalProcessCompanyFromHubSpot(hsCompanyId) {
             domain,
             address,
             city,
+            state,
+            zip,
             country
         } = company.properties;
 
@@ -38,6 +40,8 @@ async function _internalProcessCompanyFromHubSpot(hsCompanyId) {
             domain,
             address,
             city,
+            state,
+            zip,
             country,
             hsId: hsCompanyId
         };
@@ -67,6 +71,8 @@ async function _internalProcessCompanyFromHubSpot(hsCompanyId) {
                 (customerData.domain !== (existingCustomer.WebAddr?.URI?.replace('https://', '') || "")) ||
                 (customerData.address !== (existingCustomer.BillAddr?.Line1 || "")) ||
                 (customerData.city !== (existingCustomer.BillAddr?.City || "")) ||
+                (customerData.state !== (existingCustomer.BillAddr?.CountrySubDivisionCode || "")) ||
+                (customerData.zip !== (existingCustomer.BillAddr?.PostalCode || "")) ||
                 (customerData.country !== (existingCustomer.BillAddr?.Country || ""));
 
             if (!hasRealChanges) {

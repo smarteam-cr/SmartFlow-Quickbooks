@@ -21,6 +21,7 @@ async function _internalProcessContact(contactId) {
       firstname: firstName,
       lastname: lastName,
       phone,
+      hs_whatsapp_phone_number,
       address,
       city,
       state,
@@ -77,6 +78,7 @@ async function _internalProcessContact(contactId) {
       firstName,
       lastName,
       phone,
+      mobile: hs_whatsapp_phone_number,
       address,
       city,
       state,
@@ -99,6 +101,7 @@ async function _internalProcessContact(contactId) {
           (customerData.firstName !== (existingCustomer.GivenName || "")) ||
           (customerData.lastName !== (existingCustomer.FamilyName || "")) ||
           (customerData.phone !== (existingCustomer.PrimaryPhone?.FreeFormNumber || "")) ||
+          (customerData.mobile !== (existingCustomer.Mobile?.FreeFormNumber || "")) ||
           (customerData.address !== (existingCustomer.BillAddr?.Line1 || "")) ||
           (customerData.city !== (existingCustomer.BillAddr?.City || "")) ||
           (customerData.state !== (existingCustomer.BillAddr?.CountrySubDivisionCode || "")) ||
@@ -195,6 +198,7 @@ async function _internalSyncCustomerFromQuickbooks(qbCustomerId) {
       lastname: qbCustomer.FamilyName || "",
       email: qbCustomer.PrimaryEmailAddr?.Address || "",
       phone: qbCustomer.PrimaryPhone?.FreeFormNumber || "",
+      hs_whatsapp_phone_number: qbCustomer.Mobile?.FreeFormNumber || "",
       address: qbCustomer.BillAddr?.Line1 || "",
       city: qbCustomer.BillAddr?.City || "",
       state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
@@ -287,7 +291,7 @@ async function _internalSyncCustomerFromQuickbooks(qbCustomerId) {
         name: qbCustomer.CompanyName || qbCustomer.DisplayName,
         nit: qbCustomer.AlternatePhone?.FreeFormNumber || "",
         phone: qbCustomer.PrimaryPhone?.FreeFormNumber || "",
-        domain: qbCustomer.WebAddr?.URI || "",
+        domain: (qbCustomer.WebAddr?.URI || "").replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
         address: qbCustomer.BillAddr?.Line1 || "",
         city: qbCustomer.BillAddr?.City || "",
         country: qbCustomer.BillAddr?.Country || "",
