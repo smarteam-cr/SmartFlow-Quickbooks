@@ -14,20 +14,19 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     if (!hsInvoice) throw new Error(`La factura ${invoiceId} no existe en HubSpot.`);
 
     if (hsInvoice.properties.id_factura_quickbooks) {
-      logger.info(`✅ Factura HS ${invoiceId} ya existe en QuickBooks (ID: ${hsInvoice.properties.id_factura_quickbooks}). Omitiendo.`);
+      logger.info(`Factura HS ${invoiceId} ya existe en QuickBooks (ID: ${hsInvoice.properties.id_factura_quickbooks}). Omitiendo.`);
       return hsInvoice.properties.id_factura_quickbooks;
     }
 
-    // 2. Obtener y validar el Contacto Asociado (Regla de negocio: Obligatorio)
+    // 2. Obtener y validar el Contacto Asociado
     const contactAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'contacts');
     if (contactAssociations.length === 0) {
       throw new Error(`La factura ${invoiceId} no tiene un Contacto asociado en HubSpot. QuickBooks exige un Customer.`);
     }
 
     const contactId = contactAssociations[0];
-    logger.info(`👤 Procesando Contacto Asociado (ID: ${contactId})...`);
+    logger.info(`Procesando Contacto Asociado (ID: ${contactId})...`);
 
-    // Invocamos el servicio de contacto
     const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId);
     if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
 
@@ -37,7 +36,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
       throw new Error(`La factura ${invoiceId} no tiene productos (Line Items) asociados.`);
     }
 
-    logger.info(`📦 Procesando ${lineItemAssociations.length} Productos (Line Items)...`);
+    logger.info(`Procesando ${lineItemAssociations.length} Productos (Line Items)...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
 
     const qbInvoiceLines = [];
@@ -47,7 +46,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
       let qbItemId = item.properties.id_producto_quickbooks;
 
       if (!qbItemId) {
-        logger.info(`   ⚠️ El producto "${item.properties.name}" no está en QuickBooks. Creándolo al vuelo...`);
+        logger.info(`El producto "${item.properties.name}" no está en QuickBooks. Creándolo...`);
         const existingQbItem = await quickbooksClient.findItemByName(item.properties.name);
         if (existingQbItem) {
           qbItemId = existingQbItem.Id;
@@ -73,33 +72,46 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
 
     if (facturaLlevaImpuestos) {
-      logger.info('Se detectaron productos gravables. (Pendiente inyectar TxnTaxDetail)');
+      logger.info('Se detectaron productos gravables.');
     }
 
-    logger.info(`📝 Enviando Factura a QuickBooks por un total de $${hsInvoice.properties.hs_invoice_total || 'N/A'}...`);
+   logger.info(`📝 Enviando Factura a QuickBooks por un subtotal estimado de $${hsInvoice.properties.hs_invoice_total || 'N/A'}...`);
 
     const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);
 
     const qbInvoiceId = newQbInvoice.Id;
     const qbDocNumber = newQbInvoice.DocNumber;
+    const qbSyncToken = newQbInvoice.SyncToken;
+    const qbTotalAmt = newQbInvoice.TotalAmt;
+    const qbBalance = newQbInvoice.Balance;
+    
+    // Extracción segura del impuesto total
+    const qbTaxAmount = newQbInvoice.TxnTaxDetail && newQbInvoice.TxnTaxDetail.TotalTax 
+      ? newQbInvoice.TxnTaxDetail.TotalTax 
+      : 0;
 
     echoSuppression.markAsCreatedInQb(qbInvoiceId);
 
+    // Mapeo hacia las nuevas propiedades en HubSpot
     const propiedadesParaActualizar = {
       id_factura_quickbooks: qbInvoiceId.toString(),
       sistema_de_origen: "Quickbooks",
       numero_factura_qb: qbDocNumber,
-      estado_de_factura_qb: 'Borrador'
+      estado_de_factura_qb: 'Borrador',
+      qb_sync_token: qbSyncToken,
+      qb_total_amount: qbTotalAmt.toString(),
+      saldo_pendiente_qb: qbBalance.toString(),
+      qb_tax_amount: qbTaxAmount.toString()
     };
 
-    logger.info(`🔗 Enlazando el Número de Factura QB (${qbDocNumber}) a HubSpot...`);
+    logger.info(`🔗 Enlazando datos financieros oficiales (Total: $${qbTotalAmt}, Impuestos: $${qbTaxAmount}) a HubSpot...`);
     await hubspotClient.updateInvoice(invoiceId, propiedadesParaActualizar);
 
     logger.info(`🎉 Factura sincronizada y enlazada correctamente: QB ${qbInvoiceId} <-> HS ${invoiceId}`);
 
     return qbInvoiceId;
   } catch (error) {
-    logger.error(`❌ Error en la sincronización de la factura HS ${invoiceId}:`, error);
+    logger.error(`Error en la sincronización de la factura HS ${invoiceId}:`, error);
     throw error;
   }
 }

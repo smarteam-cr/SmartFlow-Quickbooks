@@ -340,7 +340,23 @@ async function searchProductByQbId(qbId) {
 
 async function getInvoiceDetails(invoiceId) {
   try {
-    const properties = "hs_invoice_total,hs_status,hs_title,id_factura_quickbooks,hs_invoice_date,hs_due_date";
+    // Ampliación de propiedades para incluir espejos financieros y control de concurrencia
+    const properties = [
+      "hs_invoice_total",
+      "hs_status",
+      "hs_title",
+      "id_factura_quickbooks",
+      "numero_factura_qb",
+      "hs_invoice_date",
+      "hs_due_date",
+      "qb_sync_token",
+      "qb_total_amount",
+      "qb_tax_amount",
+      "saldo_pendiente_qb",
+      "qb_discount_amount",
+      "fecha_estimada_pago"
+    ].join(",");
+    
     const response = await hsClient.get(`/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`);
     return response.data;
   } catch (error) {
@@ -380,7 +396,12 @@ async function getLineItemsDetails(lineItemIds) {
   try {
     const batchPayload = {
       inputs: lineItemIds.map(id => ({ id })),
-      properties: ["name", "price", "quantity", "hs_sku", "description", "id_producto_quickbooks", "es_gravable"]
+      // Añadimos campos críticos para descuentos absolutos e impuestos por línea
+      properties: [
+        "name", "price", "quantity", "hs_sku", "description", 
+        "id_producto_quickbooks", "es_gravable", 
+        "hs_discount_amount", "hs_discount_percentage", "hs_tax_rate_group_id"
+      ]
     };
     const response = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
     return response.data.results;

@@ -14,6 +14,7 @@ const config = {
     clientId: process.env.QB_CLIENT_ID,
     clientSecret: process.env.QB_CLIENT_SECRET,
     verifierToken: process.env.QB_WEBHOOK_VERIFIER_TOKEN,
+    defaultTaxCodeId: process.env.QB_DEFAULT_TAX_CODE_ID,
   },
   mongo: {
     uri: process.env.MONGODB_URI,
