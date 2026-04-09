@@ -65,9 +65,9 @@ async function _internalProcessQuickbooksPayment(paymentId) {
         if (remainingBalance === 0) {
             propertiesToUpdate.estado_de_factura_qb = 'Pagada'; 
         } else if (amountPaid > 0) {
-            propertiesToUpdate.estado_de_factura_qb = 'Pago Parcial';
+            propertiesToUpdate.estado_de_factura_qb = 'Emitida';
         } else {
-            propertiesToUpdate.estado_de_factura_qb = 'Abierta';
+            propertiesToUpdate.estado_de_factura_qb = 'Borrador';
         }
 
         // 6. Enviar el PATCH a HubSpot

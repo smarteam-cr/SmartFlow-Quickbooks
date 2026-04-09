@@ -60,8 +60,6 @@ async function handleHubSpotWebhook(request, reply) {
       'company.propertyChange': 'company',
       'product.creation': 'product',
       'product.propertyChange': 'product',
-      'deal.creation': 'invoice',
-      'deal.propertyChange': 'invoice',
     };
 
     let internalEntity = entityMap[event.subscriptionType];
@@ -88,20 +86,7 @@ async function handleHubSpotWebhook(request, reply) {
 
   return reply.code(200).send({ status: 'success' });
 }
-
-async function handleHubspotDealWebhook(request, reply) {
-  const { dealId } = request.body;
-  // La validación del dealId ahora se maneja vía JSON Schema en la capa de rutas
-  
-  const webhookService = require('../services/webhook.service');
-  logger.info(`Procesando dealId manual: ${dealId}`);
-  
-  const result = await webhookService.processDealWebhook(dealId);
-  return reply.status(200).send(result);
-}
-
 module.exports = { 
   handleQuickBooksWebhook, 
-  handleHubSpotWebhook, 
-  handleHubspotDealWebhook 
+  handleHubSpotWebhook 
 };

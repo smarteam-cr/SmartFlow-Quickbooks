@@ -1,3 +1,5 @@
+const logger = require('../lib/logger.lib');
+
 /**
  * Convierte una fecha al formato estricto de QuickBooks (YYYY-MM-DD)
  * Extrae los componentes locales para evitar que el desfase UTC sume un día.

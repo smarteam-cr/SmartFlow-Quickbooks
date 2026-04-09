@@ -17,12 +17,12 @@ const MAPPED_PRODUCT_PROPS = ['name', 'price', 'hs_price_usd', 'description', 'h
 async function processJob(job) {
     const { source, entity, entityId, eventType, _id, payload } = job;
 
-    logger.info(`[Worker] Procesando Job [${_id}]`, { 
-        jobId: _id, 
-        source, 
-        entity, 
-        entityId, 
-        eventType 
+    logger.info(`[Worker] Procesando Job [${_id}]`, {
+        jobId: _id,
+        source,
+        entity,
+        entityId,
+        eventType
     });
 
     try {
@@ -56,8 +56,9 @@ async function processJob(job) {
             else if (entity === 'company') await companySyncService.processCompany(entityId);
             else if (entity === 'product') await productSyncService.syncProductToQuickbooks(entityId);
             else if (entity === 'invoice') {
-                if (eventType.includes('deal')) {
-                    await webhookService.processDealWebhook(entityId);
+                if (eventType === 'object.creation') {
+                    logger.info(`[Worker] Factura nueva detectada en HS (ID: ${entityId}). Iniciando creación en QB...`);
+                    await invoiceSyncService.syncInvoiceToQuickbooks(entityId);
                 } else {
                     await webhookService.processHubSpotInvoiceWebhook(entityId, eventType, payload.propertyName);
                 }
@@ -68,7 +69,7 @@ async function processJob(job) {
 
         } else if (source === 'QUICKBOOKS') {
             logger.info(`📡 Sincronización QB -> HS: ${entity} ID ${entityId}`);
-            
+
             if (entity === 'contact') {
                 await contactSyncService.syncCustomerFromQuickbooks(entityId);
             } else if (entity === 'payment') {
@@ -115,7 +116,7 @@ async function startWorker() {
             if (!job || job.status !== 'PENDING') return;
 
             logger.info(`📨 Nuevo job detectado [${job._id}]`);
-            
+
             await mutex.runSequentially(job.entityId, async () => {
                 await processJob(job);
             });

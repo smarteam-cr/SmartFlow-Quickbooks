@@ -44,58 +44,6 @@ async function processPaymentNotification(payload) {
   }
 }
 
-async function processDealWebhook(dealId) {
-  try {
-    logger.info(`[HS Webhook] Iniciando procesamiento para Negocio ID: ${dealId}`, { source: 'HUBSPOT', entity: 'deal', entityId: dealId });
-
-    const dealDetails = await hubspotClient.getDealDetails(dealId);
-    logger.info(`[HubSpot] Negocio encontrado: ${dealDetails.properties.dealname} | Monto Total: $${dealDetails.properties.amount}`);
-
-    const lineItems = await hubspotClient.getLineItemsByDealId(dealId);
-    logger.info(`[HubSpot] Se encontraron ${lineItems.length} productos (Line Items) asociados.`);
-
-    lineItems.forEach((item, index) => {
-      const esGravable = item.properties.es_gravable === "true" ? "SÍ" : "NO";
-      logger.info(`   ${index + 1}. Producto: ${item.properties.name} | Precio: $${item.properties.price} | Cantidad: ${item.properties.quantity} | ¿Gravable?: ${esGravable}`);
-    });
-
-    logger.info(`[HS Webhook] Disparando sincronización de factura simulada...`);
-
-    const idFacturaDePrueba = '545773692265';
-
-    // 1. OBTENER CONTACTOS DE LA FACTURA
-    logger.info(`[HubSpot] Obteniendo contactos asociados a la factura ${idFacturaDePrueba}...`);
-    const associatedContacts = await hubspotClient.getInvoiceAssociations(idFacturaDePrueba, 'contacts');
-    logger.info(`[HubSpot] Encontrados ${associatedContacts.length} contactos asociados a la factura.`);
-
-    // 2. ASOCIAR FACTURA AL NEGOCIO (CRM Association)
-    logger.info(`[HubSpot] Asociando factura ${idFacturaDePrueba} con el Negocio ${dealId}...`);
-    await hubspotClient.associateInvoiceToDeal(idFacturaDePrueba, dealId);
-
-    // 3. ASOCIAR FACTURA A LOS CONTACTOS (Asegurar vínculo)
-    for (const contactId of associatedContacts) {
-      logger.info(`[HubSpot] Asegurando vínculo factura ${idFacturaDePrueba} <-> Contacto ${contactId}...`);
-      await hubspotClient.associateInvoiceToContact(idFacturaDePrueba, contactId);
-    }
-
-    // 3. Sincronizar hacia QuickBooks (Background)
-    invoiceSyncService.syncInvoiceToQuickbooks(idFacturaDePrueba).catch(err => {
-      logger.error(`[Fallo en Segundo Plano] Error sincronizando factura simulada ${idFacturaDePrueba}:`, err);
-    });
-
-    return {
-      success: true,
-      dealName: dealDetails.properties.dealname,
-      amount: dealDetails.properties.amount,
-      items: lineItems.map(i => ({ name: i.properties.name, price: i.properties.price }))
-    };
-
-  } catch (error) {
-    logger.error(`[HS Webhook] Error procesando el negocio ${dealId}:`, error);
-    throw error;
-  }
-}
-
 /**
  * Procesa webhooks de Facturas de HubSpot (Objeto 0-53).
  */
@@ -147,7 +95,6 @@ async function processHubSpotLineItemWebhook(lineItemId) {
 
 module.exports = { 
   processPaymentNotification, 
-  processDealWebhook,
   processHubSpotInvoiceWebhook,
   processHubSpotLineItemWebhook
 };

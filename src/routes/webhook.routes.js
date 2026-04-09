@@ -43,17 +43,6 @@ async function webhookRoutes(fastify, options) {
     schema: hubspotWebhookSchema,
     preHandler: authMiddleware.validateHubSpotSignature
   }, webhookController.handleHubSpotWebhook);
-
-  // HubSpot Manual/Simulado (Sin firma para pruebas internas)
-  fastify.post('/hubspot/deal-simulated', {
-    schema: {
-      body: {
-        type: 'object',
-        required: ['dealId'],
-        properties: { dealId: { type: 'string' } }
-      }
-    }
-  }, webhookController.handleHubspotDealWebhook);
 }
 
 module.exports = webhookRoutes;
