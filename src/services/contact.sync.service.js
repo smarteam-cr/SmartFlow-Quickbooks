@@ -294,6 +294,8 @@ async function _internalSyncCustomerFromQuickbooks(qbCustomerId) {
         domain: (qbCustomer.WebAddr?.URI || "").replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
         address: qbCustomer.BillAddr?.Line1 || "",
         city: qbCustomer.BillAddr?.City || "",
+        state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
+        zip: qbCustomer.BillAddr?.PostalCode || "",
         country: qbCustomer.BillAddr?.Country || "",
         id_usuario_quickbooks: qbCustomerId.toString()
       };

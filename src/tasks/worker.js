@@ -10,8 +10,8 @@ const mutex = require('../utils/mutex.util');
 const logger = require('../lib/logger.lib');
 
 // Mapeos de propiedades para filtrado (HS)
-const MAPPED_CONTACT_PROPS = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country'];
-const MAPPED_COMPANY_PROPS = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'country'];
+const MAPPED_CONTACT_PROPS = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'hs_whatsapp_phone_number'];
+const MAPPED_COMPANY_PROPS = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'state', 'zip', 'country'];
 const MAPPED_PRODUCT_PROPS = ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'];
 
 async function processJob(job) {

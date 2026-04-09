@@ -137,6 +137,7 @@ async function _internalSyncProductFromQuickbooks(qbItemId) {
         const properties = {
             name: qbItem.Name,
             price: (qbItem.UnitPrice || 0).toString(),
+            hs_price_usd: (qbItem.UnitPrice || 0).toString(),
             description: qbItem.Description || "",
             hs_sku: qbItem.Sku || "",
             es_gravable: qbItem.Taxable ? "true" : "false",
@@ -150,6 +151,7 @@ async function _internalSyncProductFromQuickbooks(qbItemId) {
             const hasRealChanges = 
                 (properties.name !== (hsProduct.properties.name || "")) ||
                 (Math.abs(Number(properties.price) - Number(hsProduct.properties.price || 0)) > 0.01) ||
+                (Math.abs(Number(properties.hs_price_usd) - Number(hsProduct.properties.hs_price_usd || 0)) > 0.01) ||
                 (properties.description !== (hsProduct.properties.description || "")) ||
                 (properties.hs_sku !== (hsProduct.properties.hs_sku || "")) ||
                 (properties.es_gravable !== (hsProduct.properties.es_gravable || "false"));

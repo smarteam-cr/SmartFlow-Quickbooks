@@ -87,7 +87,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
 
     const propiedadesParaActualizar = {
       id_factura_quickbooks: qbInvoiceId.toString(),
-      sistema_de_origen: "QuickBooks",
+      sistema_de_origen: "Quickbooks",
       numero_factura_qb: qbDocNumber,
       estado_de_factura_qb: 'Borrador'
     };
