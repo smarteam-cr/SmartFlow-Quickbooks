@@ -58,7 +58,7 @@ async function refreshQuickBooksToken(tenantId) {
   qbRefreshPromise = (async () => {
     try {
       logger.info(`[AuthService] Starting QuickBooks token refresh for tenant: ${tenantId}`);
-      
+
       const tenant = await Tenant.findOne({ tenantId });
       if (!tenant || !tenant.quickbooks?.refreshToken) {
         throw new Error('No existe configuración de Tenant o Refresh Token válido.');
@@ -83,11 +83,11 @@ async function refreshQuickBooksToken(tenantId) {
         }
       );
 
-      const { 
-        access_token, 
-        refresh_token, 
-        expires_in, 
-        x_refresh_token_expires_in 
+      const {
+        access_token,
+        refresh_token,
+        expires_in,
+        x_refresh_token_expires_in
       } = response.data;
 
       // Actualización atómica en base de datos

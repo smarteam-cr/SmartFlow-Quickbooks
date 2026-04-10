@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 # Agents
 .agents
 skills-lock.json
+
+# Scripts
+src/scripts/seed-tenants.js
