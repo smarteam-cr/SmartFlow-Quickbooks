@@ -324,6 +324,17 @@ async function updateInvoice(qbInvoiceId, syncToken, invoicePayload) {
   }
 }
 
+async function createPayment(paymentPayload) {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const response = await qbClient.post(`${baseUrl}/payment?minorversion=75`, paymentPayload);
+    return response.data.Payment;
+  } catch (error) {
+    logger.error('Error creando Pago en QuickBooks:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -340,4 +351,5 @@ module.exports = {
   updateCustomer,
   updateItem,
   updateInvoice,
+  createPayment,
 };

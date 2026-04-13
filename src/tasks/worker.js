@@ -66,6 +66,10 @@ async function processJob(job) {
             else if (entity === 'line_item') {
                 await webhookService.processHubSpotLineItemWebhook(entityId);
             }
+            else if (entity === 'hs_payment') {
+                logger.info(`[Worker] Pago nuevo detectado en HS (ID: ${entityId}). Iniciando creación en QB...`);
+                await paymentSyncService.syncPaymentToQuickbooks(entityId);
+            }
 
         } else if (source === 'QUICKBOOKS') {
             logger.info(`📡 Sincronización QB -> HS: ${entity} ID ${entityId}`);

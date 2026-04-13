@@ -64,11 +64,13 @@ async function handleHubSpotWebhook(request, reply) {
 
     let internalEntity = entityMap[event.subscriptionType];
 
-    // Casos Especiales por ObjectTypeId (Facturas y Line Items Beta)
+    // Casos Especiales por ObjectTypeId (Facturas, Line Items y Pagos HS)
     if (event.objectTypeId === '0-53') {
       internalEntity = 'invoice';
     } else if (event.objectTypeId === '0-27' || event.subscriptionType.startsWith('line_item')) {
       internalEntity = 'line_item';
+    } else if (event.objectTypeId === '0-101') {
+      internalEntity = 'hs_payment';
     }
 
     if (internalEntity && targetId) {

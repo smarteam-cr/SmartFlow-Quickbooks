@@ -1,5 +1,7 @@
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
+const contactSyncService = require('./contact.sync.service');
+const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
 const mutex = require('../utils/mutex.util');
 
@@ -84,6 +86,65 @@ async function processQuickbooksPayment(paymentId) {
     return await _internalProcessQuickbooksPayment(paymentId);
 }
 
+/**
+ * --- SINCRONIZACIÓN HS -> QB (PAGOS) ---
+ * Escucha la creación de un pago en HubSpot, resuelve el cliente en QB
+ * y crea un Unapplied Payment (sin asociar a factura).
+ */
+async function syncPaymentToQuickbooks(hsPaymentId) {
+    logger.info(`[Sync] Iniciando sincronización de Pago HS ID: ${hsPaymentId}`, { source: 'HUBSPOT', entity: 'hs_payment', entityId: hsPaymentId });
+
+    try {
+        // 1. Obtener detalles del pago desde HubSpot
+        const hsPayment = await hubspotClient.getPaymentDetails(hsPaymentId);
+        if (!hsPayment) throw new Error(`El pago ${hsPaymentId} no existe en HubSpot.`);
+
+        const refNumber = hsPayment.properties.hs_reference_number || '';
+        const totalAmount = Number(hsPayment.properties.hs_total_collected_amount_after_refunds || 0);
+
+        if (totalAmount <= 0) {
+            logger.warn(`[Pagos HS→QB] ⚠️ El pago ${hsPaymentId} tiene monto $0 o negativo. Omitiendo.`);
+            return;
+        }
+
+        // 2. Obtener el contacto asociado al pago en HS
+        const contactAssociations = await hubspotClient.getPaymentAssociations(hsPaymentId, 'contacts');
+        if (contactAssociations.length === 0) {
+            throw new Error(`El pago HS ${hsPaymentId} no tiene un Contacto asociado. QuickBooks exige un Customer.`);
+        }
+
+        const contactId = contactAssociations[0];
+        logger.info(`[Pagos HS→QB] Procesando Contacto Asociado (ID: ${contactId})...`);
+
+        // 3. Resolver el Customer en QuickBooks
+        const { qbCustomerId } = await contactSyncService.processContact(contactId);
+        if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
+
+        // 4. Construir y enviar el payload a QuickBooks
+        const qbPaymentPayload = {
+            CustomerRef: { value: qbCustomerId.toString() },
+            TotalAmt: totalAmount,
+            PaymentRefNum: refNumber
+        };
+
+        logger.info(`💳 Enviando Pago a QuickBooks (Ref: ${refNumber}, Monto: $${totalAmount})...`);
+
+        const newQbPayment = await quickbooksClient.createPayment(qbPaymentPayload);
+
+        // 5. Echo suppression para que QB no lo re-procese
+        echoSuppression.markAsCreatedInQb(newQbPayment.Id);
+
+        logger.info(`🎉 Pago sincronizado correctamente: QB ${newQbPayment.Id} ← HS ${hsPaymentId}`);
+
+        return newQbPayment.Id;
+
+    } catch (error) {
+        logger.error(`❌ Error sincronizando pago HS ${hsPaymentId} hacia QuickBooks:`, error);
+        throw error;
+    }
+}
+
 module.exports = {
-    processQuickbooksPayment
+    processQuickbooksPayment,
+    syncPaymentToQuickbooks
 };

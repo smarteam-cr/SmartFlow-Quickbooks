@@ -563,6 +563,36 @@ async function updateProduct(productId, properties) {
   }
 }
 
+async function getPaymentDetails(paymentId) {
+  try {
+    const properties = [
+      "hs_reference_number",
+      "hs_total_collected_amount_after_refunds"
+    ].join(",");
+
+    const response = await hsClient.get(`/crm/v3/objects/0-101/${paymentId}?properties=${properties}`);
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      logger.warn(`El pago ${paymentId} devolvió 404 en HubSpot.`);
+      return null;
+    }
+    logger.error(`Error obteniendo el pago ${paymentId} de HubSpot:`, error);
+    throw error;
+  }
+}
+
+async function getPaymentAssociations(paymentId, toObjectType) {
+  try {
+    const response = await hsClient.get(`/crm/v3/objects/0-101/${paymentId}/associations/${toObjectType}`);
+    return response.data.results.map((assoc) => assoc.id);
+  } catch (error) {
+    if (error.response?.status === 404) return [];
+    logger.error(`Error obteniendo asociaciones de ${toObjectType} para el pago ${paymentId}:`, error);
+    throw error;
+  }
+}
+
 module.exports = {
   getContactDetails,
   updateContactProperty,
@@ -599,4 +629,7 @@ module.exports = {
   searchContactByQbId,
   disassociateContactFromCompany,
   getLineItemAssociations,
+  getPaymentDetails,
+  getPaymentAssociations,
 };
+
