@@ -13,6 +13,19 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     const hsInvoice = await hubspotClient.getInvoiceDetails(invoiceId);
     if (!hsInvoice) throw new Error(`La factura ${invoiceId} no existe en HubSpot.`);
 
+    const balance = Number(hsInvoice.properties.hs_balance_due || 0);
+    if (balance > 0) {
+      logger.warn(`🛑 [Business Rule] Factura ${invoiceId} con saldo de $${balance}. No está 100% pagada. Abortando creación en QB.`);
+      return null;
+    }
+
+    // 1.2 Validar que NO sea un borrador vacío (Verificamos si tiene productos reales)
+    const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
+    if (lineItemAssociations.length === 0) {
+      logger.warn(`🛑 [Business Rule] Factura ${invoiceId} no tiene productos (Line Items). Es un borrador vacío. Abortando creación en QB.`);
+      return null;
+    }
+
     if (hsInvoice.properties.id_factura_quickbooks) {
       logger.info(`Factura HS ${invoiceId} ya existe en QuickBooks (ID: ${hsInvoice.properties.id_factura_quickbooks}). Omitiendo.`);
       return hsInvoice.properties.id_factura_quickbooks;
@@ -30,12 +43,7 @@ async function syncInvoiceToQuickbooks(invoiceId) {
     const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId);
     if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
 
-    // 3. Obtener y validar los Productos (Line Items)
-    const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
-    if (lineItemAssociations.length === 0) {
-      throw new Error(`La factura ${invoiceId} no tiene productos (Line Items) asociados.`);
-    }
-
+    // 3. Procesar los Productos (Ya los buscamos arriba, así que solo obtenemos los detalles)
     logger.info(`Procesando ${lineItemAssociations.length} Productos (Line Items)...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
 
@@ -106,6 +114,11 @@ async function syncInvoiceToQuickbooks(invoiceId) {
 
     logger.info(`🔗 Enlazando datos financieros oficiales (Total: $${qbTotalAmt}, Impuestos: $${qbTaxAmount}) a HubSpot...`);
     await hubspotClient.updateInvoice(invoiceId, propiedadesParaActualizar);
+    
+    // 5. Conciliación de Pagos 
+    const paymentSyncService = require('./payment.sync.service');
+    logger.info(`⏳ Iniciando conciliación de pagos para la nueva factura...`);
+    await paymentSyncService.reconcilePaymentsForInvoice(invoiceId, qbInvoiceId);
 
     logger.info(`🎉 Factura sincronizada y enlazada correctamente: QB ${qbInvoiceId} <-> HS ${invoiceId}`);
 

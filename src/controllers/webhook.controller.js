@@ -9,7 +9,7 @@ async function handleQuickBooksWebhook(request, reply) {
   if (payload.eventNotifications) {
     for (const notification of payload.eventNotifications) {
       for (const entity of notification.dataChangeEvent.entities) {
-        
+
         // Mapeo de entidades de QB a nuestro estándar interno
         const entityMapping = {
           'Payment': 'payment',
@@ -19,10 +19,10 @@ async function handleQuickBooksWebhook(request, reply) {
         };
 
         const internalEntity = entityMapping[entity.name];
-        
+
         // Filtro de operaciones (Reglas de negocio)
         const validOps = ['Create', 'Update', 'Emailed'];
-        
+
         if (internalEntity && validOps.includes(entity.operation)) {
           const job = await jobService.createJob({
             source: 'QUICKBOOKS',
@@ -46,7 +46,7 @@ async function handleHubSpotWebhook(request, reply) {
 
   for (const event of events) {
     const targetId = event.fromObjectId || event.objectId;
-    
+
     if (!targetId) {
       logger.warn(`⚠️ Evento ${event.subscriptionType} ignorado por falta de ID.`, { event });
       continue;
@@ -65,8 +65,30 @@ async function handleHubSpotWebhook(request, reply) {
     let internalEntity = entityMap[event.subscriptionType];
 
     // Casos Especiales por ObjectTypeId (Facturas, Line Items y Pagos HS)
+    // Casos Especiales por ObjectTypeId (Facturas, Line Items y Pagos HS)
     if (event.objectTypeId === '0-53') {
       internalEntity = 'invoice';
+
+      // --- ESCUDO PARA FACTURAS (hs_balance_due) ---
+      if (event.subscriptionType === 'object.propertyChange' && event.propertyName === 'hs_balance_due') {
+        const balance = Number(event.propertyValue);
+
+        if (isNaN(balance) || balance > 0) {
+          logger.info(`[Webhook/HS] Factura ${targetId} con saldo parcial (${event.propertyValue}). Ignorando, no se crea en QB.`);
+          continue; // 🛑 Se rechaza, no toca la BD, pasa al siguiente evento
+        }
+
+        logger.info(`[Webhook/HS] ¡Factura ${targetId} pagada! Saldo es 0. Transformando evento para creación en QB.`);
+
+        // Transformamos el evento internamente para que tu Worker.js re-use la lógica actual de creación
+        event.subscriptionType = 'object.creation';
+      }
+      else if (event.subscriptionType === 'object.creation') {
+        // Bloqueo de seguridad: como ya apagaste esto en HS, si llega alguno colgado, lo ignoramos
+        continue;
+      }
+      // Si es object.propertyChange de OTRAS propiedades, seguirá su curso normal...
+
     } else if (event.objectTypeId === '0-27' || event.subscriptionType.startsWith('line_item')) {
       internalEntity = 'line_item';
     } else if (event.objectTypeId === '0-101') {
@@ -88,7 +110,7 @@ async function handleHubSpotWebhook(request, reply) {
 
   return reply.code(200).send({ status: 'success' });
 }
-module.exports = { 
-  handleQuickBooksWebhook, 
-  handleHubSpotWebhook 
+module.exports = {
+  handleQuickBooksWebhook,
+  handleHubSpotWebhook
 };

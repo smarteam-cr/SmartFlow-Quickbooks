@@ -343,6 +343,7 @@ async function getInvoiceDetails(invoiceId) {
     // Ampliación de propiedades para incluir espejos financieros y control de concurrencia
     const properties = [
       "hs_invoice_total",
+      "hs_balance_due",
       "hs_status",
       "hs_title",
       "id_factura_quickbooks",

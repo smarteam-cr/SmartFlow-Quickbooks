@@ -144,7 +144,68 @@ async function syncPaymentToQuickbooks(hsPaymentId) {
     }
 }
 
+async function reconcilePaymentsForInvoice(hsInvoiceId, qbInvoiceId) {
+    logger.info(`[Conciliación] Iniciando cruce de pagos para Factura HS ${hsInvoiceId} y QB ${qbInvoiceId}...`);
+    try {
+        // 1. Obtener los IDs de los pagos asociados a la factura en HubSpot (El objeto payment en HS suele ser 0-101)
+        const paymentIds = await hubspotClient.getInvoiceAssociations(hsInvoiceId, '0-101'); 
+        
+        if (!paymentIds || paymentIds.length === 0) {
+            logger.info(`[Conciliación] No hay pagos asociados en HS para la factura ${hsInvoiceId}.`);
+            return;
+        }
+
+        logger.info(`[Conciliación] Se encontraron ${paymentIds.length} pagos en HS. Obteniendo referencias...`);
+
+        // 2. Iterar sobre los pagos de HS para buscar su contraparte en QB
+        for (const paymentId of paymentIds) {
+            const hsPayment = await hubspotClient.getPaymentDetails(paymentId);
+            if (!hsPayment) continue;
+
+            const refNumber = hsPayment.properties.hs_reference_number;
+            const paymentAmount = Number(hsPayment.properties.hs_total_collected_amount_after_refunds || 0);
+
+            if (!refNumber) {
+                logger.warn(`[Conciliación] El pago HS ${paymentId} no tiene referencia (hs_reference_number). Saltando.`);
+                continue;
+            }
+
+            logger.info(`[Conciliación] Buscando en QB el pago con Referencia: "${refNumber}"...`);
+
+            // 3. Buscar el pago en QuickBooks por su Referencia
+            const qbPayments = await quickbooksClient.findPaymentByRefNumber(refNumber);
+
+            if (!qbPayments || qbPayments.length === 0) {
+                logger.warn(`[Conciliación] No se encontró el pago en QB con referencia "${refNumber}".`);
+                continue;
+            }
+
+            const qbPayment = qbPayments[0]; // Tomamos el que coincida
+
+            // Extraemos el ID del cliente que QB necesita
+            const customerId = qbPayment.CustomerRef ? qbPayment.CustomerRef.value : null;
+
+            if (!customerId) {
+                 logger.warn(`[Conciliación] El pago QB ${qbPayment.Id} no tiene un cliente asociado. No se puede enlazar.`);
+                 continue;
+            }
+
+            // 4. Enlazar el Pago de QB a la Factura de QB
+            logger.info(`[Conciliación] Enlazando Pago QB ID ${qbPayment.Id} a Factura QB ID ${qbInvoiceId} por un monto de $${paymentAmount}...`);
+            await quickbooksClient.linkPaymentToInvoice(qbPayment.Id, qbPayment.SyncToken, qbInvoiceId, paymentAmount, customerId);
+            
+            logger.info(`[Conciliación] ✅ Pago "${refNumber}" aplicado exitosamente a la factura.`);
+        }
+        
+        logger.info(`[Conciliación] Fin del proceso de conciliación para la Factura HS ${hsInvoiceId}.`);
+    } catch (error) {
+        // Al imprimir error.message evitamos pasar el objeto completo al logger
+        logger.error(`[Conciliación] ❌ Error durante la conciliación de la factura HS ${hsInvoiceId}: ${error.message}`);
+    }
+}
+
 module.exports = {
     processQuickbooksPayment,
-    syncPaymentToQuickbooks
+    syncPaymentToQuickbooks,
+    reconcilePaymentsForInvoice
 };

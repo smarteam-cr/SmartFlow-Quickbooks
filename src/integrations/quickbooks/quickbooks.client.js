@@ -335,6 +335,59 @@ async function createPayment(paymentPayload) {
   }
 }
 
+async function findPaymentByRefNumber(refNumber) {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const safeRef = refNumber.replace(/'/g, "\\'");
+    const query = `SELECT * FROM Payment WHERE PaymentRefNum = '${safeRef}'`;
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    return response.data.QueryResponse.Payment || [];
+  } catch (error) {
+    logger.error(`Error buscando Pago por referencia ${refNumber}:`, error);
+    throw error;
+  }
+}
+
+async function linkPaymentToInvoice(paymentId, syncToken, qbInvoiceId, amount, customerId) {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const payload = {
+      Id: String(paymentId),
+      SyncToken: String(syncToken),
+      sparse: true,
+      CustomerRef: { value: String(customerId) },
+      TotalAmt: Number(amount), // QB a veces exige confirmar el TotalAmt incluso en sparse updates
+      Line: [
+        {
+          Amount: Number(amount),
+          LinkedTxn: [
+            {
+              TxnId: String(qbInvoiceId),
+              TxnType: "Invoice"
+            }
+          ]
+        }
+      ]
+    };
+    
+    const response = await qbClient.post(`${baseUrl}/payment?minorversion=65`, payload);
+    return response.data.Payment;
+  } catch (error) {
+    // --- EXTRACCIÓN PRECISA DEL ERROR DE QUICKBOOKS ---
+    let qbErrorDetail = error.message;
+    if (error.response && error.response.data && error.response.data.Fault) {
+      // Extraemos el detalle exacto de la validación de negocio de Intuit
+      const faultError = error.response.data.Fault.Error[0];
+      qbErrorDetail = faultError.Detail || faultError.Message;
+    }
+    
+    logger.error(`Error de validación enlazando Pago ${paymentId} a Factura ${qbInvoiceId}. Detalle QB: ${qbErrorDetail}`);
+    
+    // Lanzamos el mensaje limpio como un Error nativo de Node, no el objeto Axios completo
+    throw new Error(qbErrorDetail);
+  }
+}
+
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -352,4 +405,6 @@ module.exports = {
   updateItem,
   updateInvoice,
   createPayment,
+  findPaymentByRefNumber,
+  linkPaymentToInvoice
 };

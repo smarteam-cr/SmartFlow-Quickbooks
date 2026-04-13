@@ -22,9 +22,7 @@ const validateHubSpotSignature = (request, reply, done) => {
   const payload = JSON.stringify(request.body);
   const sourceString = appSecret + payload;
   const hash = crypto.createHash('sha256').update(sourceString).digest('hex');
-  console.log(hash)
-  console.log(signature)
-
+  
   if (hash !== signature) {
     logger.error('[Auth] Petición rechazada: Firma de HubSpot inválida');
     return reply.status(401).send({ status: 'error', message: 'Firma inválida' });
