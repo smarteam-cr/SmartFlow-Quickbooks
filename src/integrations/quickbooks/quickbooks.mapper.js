@@ -18,8 +18,6 @@ const mapLineItemToQb = (hsItem, qbItemId) => {
       Qty: qty,
       TaxCodeRef: { value: isTaxable ? "TAX" : "NON" }
     },
-    // Almacenamos temporalmente las propiedades originales para cálculos en el mapper padre
-    _originalHsProperties: hsItem.properties 
   };
 };
 
@@ -40,7 +38,7 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo)
     payload.BillAddr = { Line1: displayName, Line2: addressParts.join(', ') };
   }
 
-  let totalDiscountAmount = 0;
+  let totalDiscountAmount = Number(hsInvoice.properties.hs_discounts_total || 0);
   let hasTaxableItem = false;
 
   for (const line of qbInvoiceLines) {
@@ -49,18 +47,6 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo)
       hasTaxableItem = true;
     }
 
-    // 2. Extracción de descuentos en valor absoluto
-    const props = line._originalHsProperties;
-    if (props) {
-      if (props.hs_discount_amount) {
-        totalDiscountAmount += Number(props.hs_discount_amount);
-      } else if (props.hs_discount_percentage) {
-        const lineTotal = line.Amount; // Usamos el Amount ya calculado (price * qty)
-        totalDiscountAmount += lineTotal * (Number(props.hs_discount_percentage) / 100);
-      }
-      delete line._originalHsProperties; // Limpieza del objeto temporal
-    }
-    
     payload.Line.push(line);
   }
 
