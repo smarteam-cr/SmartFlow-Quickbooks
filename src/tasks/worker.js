@@ -1,137 +1,149 @@
+// src/tasks/worker.js
 const SyncJob = require('../db/models/job.model');
 const jobService = require('../services/job.service');
 const contactSyncService = require('../services/contact.sync.service');
 const companySyncService = require('../services/company.sync.service');
-const productSyncService = require('../services/product.sync.service');
-const invoiceSyncService = require('../services/invoice.sync.service');
-const paymentSyncService = require('../services/payment.sync.service');
-const webhookService = require('../services/webhook.service');
+// Nota: Importaremos productos y facturas a medida que los refactoricemos
 const mutex = require('../utils/mutex.util');
 const logger = require('../lib/logger.lib');
+const config = require('../config');
+const { SOURCES, ENTITIES, JOB_STATUS } = require('../config/constants');
 
-// Mapeos de propiedades para filtrado (HS)
-const MAPPED_CONTACT_PROPS = ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'hs_whatsapp_phone_number'];
-const MAPPED_COMPANY_PROPS = ['name', 'nit', 'phone', 'domain', 'address', 'city', 'state', 'zip', 'country'];
-const MAPPED_PRODUCT_PROPS = ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'];
+const CONCURRENCY = config.worker.concurrency || 3;
+let activeJobs = 0;
 
+/**
+ * Orquestador de ejecución para un Job específico
+ */
 async function processJob(job) {
-    const { source, entity, entityId, eventType, _id, payload } = job;
+  const { source, entity, entityId, _id, tenantId, correlationId } = job;
+  const startTime = Date.now();
 
-    logger.info(`[Worker] Procesando Job [${_id}]`, {
-        jobId: _id,
-        source,
-        entity,
-        entityId,
-        eventType
-    });
+  logger.info(`[Worker] Iniciando Job [${_id}]`, { entity, entityId, correlationId, attempt: job.attempts + 1 });
+  
+  await jobService.markProcessing(_id);
 
-    try {
-        if (source === 'HUBSPOT') {
-            // 1. Filtrado de propiedades (solo para propertyChange de HS)
-            if (eventType.includes('propertyChange')) {
-                const propertyName = payload.propertyName;
-                const propMap = {
-                    contact: MAPPED_CONTACT_PROPS,
-                    company: MAPPED_COMPANY_PROPS,
-                    product: MAPPED_PRODUCT_PROPS,
-                };
-
-                if (propMap[entity] && !propMap[entity].includes(propertyName)) {
-                    logger.info(`⏩ Propiedad "${propertyName}" no mapeada para ${entity}. Saltando.`);
-                    await jobService.markCompleted(_id);
-                    return;
-                }
-            }
-
-            // 2. Echo suppression (HS)
-            const echoSuppression = require('../utils/echo.suppression.util');
-            if (echoSuppression.wasCreatedInHs(entityId)) {
-                logger.info(`♻️ [Echo] Ignorando cambio en HS para ${entity} ID: ${entityId}`);
-                await jobService.markCompleted(_id);
-                return;
-            }
-
-            // 3. Enrutador HS -> QB
-            if (entity === 'contact') await contactSyncService.processContact(entityId);
-            else if (entity === 'company') await companySyncService.processCompany(entityId);
-            else if (entity === 'product') await productSyncService.syncProductToQuickbooks(entityId);
-            else if (entity === 'invoice') {
-                if (eventType === 'object.creation') {
-                    logger.info(`[Worker] Factura nueva detectada en HS (ID: ${entityId}). Iniciando creación en QB...`);
-                    await invoiceSyncService.syncInvoiceToQuickbooks(entityId);
-                } else {
-                    await webhookService.processHubSpotInvoiceWebhook(entityId, eventType, payload.propertyName);
-                }
-            }
-            else if (entity === 'line_item') {
-                await webhookService.processHubSpotLineItemWebhook(entityId);
-            }
-            else if (entity === 'hs_payment') {
-                logger.info(`[Worker] Pago nuevo detectado en HS (ID: ${entityId}). Iniciando creación en QB...`);
-                await paymentSyncService.syncPaymentToQuickbooks(entityId);
-            }
-
-        } else if (source === 'QUICKBOOKS') {
-            logger.info(`📡 Sincronización QB -> HS: ${entity} ID ${entityId}`);
-
-            if (entity === 'contact') {
-                await contactSyncService.syncCustomerFromQuickbooks(entityId);
-            } else if (entity === 'payment') {
-                await paymentSyncService.processQuickbooksPayment(entityId);
-            } else if (entity === 'product') {
-                await productSyncService.syncProductFromQuickbooks(entityId);
-            } else if (entity === 'invoice') {
-                await invoiceSyncService.syncInvoiceFromQuickbooks(entityId);
-            } else {
-                logger.warn(`⚠️ Entidad QB no soportada: ${entity}`);
-            }
-        }
-
-        await jobService.markCompleted(_id);
-        logger.info(`✅ Job [${_id}] completado con éxito.`);
-
-    } catch (error) {
-        logger.error(`❌ Job [${_id}] falló por excepción:`, error);
-        await jobService.markFailed(_id, error.message);
+  try {
+    if (source === SOURCES.HUBSPOT) {
+      await routeHubSpotJob(job);
+    } else if (source === SOURCES.QUICKBOOKS) {
+      await routeQuickBooksJob(job);
     }
+
+    await jobService.markCompleted(_id);
+    logger.info(`✅ Job [${_id}] completado en ${Date.now() - startTime}ms`);
+
+  } catch (error) {
+    logger.error(`❌ Job [${_id}] falló: ${error.message}`, { 
+      correlationId, 
+      stack: config.nodeEnv !== 'production' ? error.stack : undefined 
+    });
+    
+    // El servicio de jobs decidirá si va a RETRY_PENDING o DEAD_LETTER
+    await jobService.markFailed(_id, error.message, error.stack, error);
+  }
+}
+
+/**
+ * Enrutador para eventos originados en HubSpot
+ */
+async function routeHubSpotJob(job) {
+  const { entity, entityId, tenantId } = job;
+
+  switch (entity) {
+    case ENTITIES.CONTACT:
+      await contactSyncService.processContact(entityId, tenantId);
+      break;
+    case ENTITIES.COMPANY:
+      await companySyncService.processCompany(entityId, tenantId);
+      break;
+    // Los demás casos se activarán al refactorizar sus servicios
+    default:
+      logger.warn(`[Worker] Entidad HS no soportada o pendiente: ${entity}`);
+      await jobService.markSkipped(job._id, 'Entidad no soportada');
+  }
+}
+
+/**
+ * Enrutador para eventos originados en QuickBooks
+ */
+async function routeQuickBooksJob(job) {
+  const { entity, entityId, tenantId } = job;
+
+  switch (entity) {
+    case ENTITIES.CONTACT:
+      await contactSyncService.syncCustomerFromQuickbooks(entityId, tenantId);
+      break;
+    case ENTITIES.COMPANY:
+      await companySyncService.syncCompanyFromQuickbooks(entityId, tenantId);
+      break;
+    default:
+      logger.warn(`[Worker] Entidad QB no soportada o pendiente: ${entity}`);
+      await jobService.markSkipped(job._id, 'Entidad no soportada');
+  }
+}
+
+/**
+ * Control de flujo y Mutex
+ */
+async function scheduleJob(job) {
+  if (activeJobs >= CONCURRENCY) return; 
+
+  activeJobs++;
+  try {
+    // El Mutex garantiza que si llegan 4 eventos del mismo ID, se procesen uno tras otro
+    await mutex.runSequentially(job.entityId, () => processJob(job));
+  } finally {
+    activeJobs--;
+  }
+}
+
+/**
+ * Poller de Reintentos (cada 30 segundos)
+ */
+function startRetryPoller() {
+  setInterval(async () => {
+    try {
+      // Buscamos jobs de cualquier tenant que necesiten reintento
+      const retryJobs = await SyncJob.find({
+        status: JOB_STATUS.RETRY_PENDING,
+        nextRetryAt: { $lte: new Date() }
+      }).limit(CONCURRENCY);
+
+      for (const job of retryJobs) {
+        scheduleJob(job);
+      }
+    } catch (err) {
+      logger.error(`[Worker] Error en retry poller: ${err.message}`);
+    }
+  }, 30000);
 }
 
 async function startWorker() {
-    logger.info('👷 Worker iniciado. Escuchando eventos PENDING...');
+  logger.info(`👷 Worker V2.0 iniciado (Concurrencia: ${CONCURRENCY})`);
 
-    try {
-        const pendingJobs = await SyncJob.find({ status: 'PENDING' });
-        if (pendingJobs.length > 0) {
-            logger.info(`🔄 Encontrados ${pendingJobs.length} jobs pendientes previos.`);
-            for (const job of pendingJobs) {
-                await mutex.runSequentially(job.entityId, async () => {
-                    await processJob(job);
-                });
-            }
-        }
-
-        const changeStream = SyncJob.watch(
-            [{ $match: { operationType: 'insert' } }],
-            { fullDocument: 'updateLookup' }
-        );
-
-        changeStream.on('change', async (change) => {
-            const job = change.fullDocument;
-            if (!job || job.status !== 'PENDING') return;
-
-            logger.info(`📨 Nuevo job detectado [${job._id}]`);
-
-            await mutex.runSequentially(job.entityId, async () => {
-                await processJob(job);
-            });
-        });
-
-        changeStream.on('error', (error) => {
-            logger.error('💥 Error en Change Stream de MongoDB:', error);
-        });
-    } catch (error) {
-        logger.error('💥 Error crítico iniciando el Worker:', error);
+  try {
+    // 1. Procesar rezagados al arrancar
+    const pending = await SyncJob.find({ status: JOB_STATUS.PENDING }).sort({ createdAt: 1 });
+    for (const job of pending) {
+      scheduleJob(job);
     }
+
+    // 2. Escuchar nuevos jobs vía Change Stream
+    const changeStream = SyncJob.watch([{ $match: { operationType: 'insert' } }]);
+    changeStream.on('change', async (change) => {
+      const job = await SyncJob.findById(change.documentKey._id);
+      if (job && job.status === JOB_STATUS.PENDING) {
+        scheduleJob(job);
+      }
+    });
+
+    // 3. Iniciar recuperador de fallos temporales
+    startRetryPoller();
+
+  } catch (err) {
+    logger.error('💥 Error crítico en Change Stream:', err);
+  }
 }
 
 module.exports = { startWorker };

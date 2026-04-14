@@ -43,7 +43,7 @@ async function markProcessing(jobId) {
   return SyncJob.findByIdAndUpdate(
     jobId, 
     { status: JOB_STATUS.PROCESSING, $inc: { attempts: 1 } }, 
-    { new: true }
+    { returnDocument: 'after' }
   );
 }
 
@@ -51,7 +51,7 @@ async function markCompleted(jobId) {
   return SyncJob.findByIdAndUpdate(
     jobId, 
     { status: JOB_STATUS.COMPLETED, completedAt: new Date() }, 
-    { new: true }
+    { returnDocument: 'after' }
   );
 }
 
@@ -59,7 +59,7 @@ async function markSkipped(jobId, reason) {
   return SyncJob.findByIdAndUpdate(
     jobId, 
     { status: JOB_STATUS.SKIPPED, lastError: reason, completedAt: new Date() }, 
-    { new: true }
+    { returnDocument: 'after' }
   );
 }
 
@@ -86,7 +86,7 @@ async function markFailed(jobId, errorMessage, errorStack, errorObject = null) {
     lastErrorStack: errorStack,
     isRetryable,
     ...(nextRetryAt && { nextRetryAt }),
-  }, { new: true });
+  }, { returnDocument: 'after' });
 }
 
 // Métodos para el Poller del Worker

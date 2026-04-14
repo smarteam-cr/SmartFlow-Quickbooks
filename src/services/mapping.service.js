@@ -34,7 +34,7 @@ async function upsertMapping({ tenantId, entityType, hsId, qbId, qbSyncToken, pa
   return EntityMapping.findOneAndUpdate(
     query,
     update,
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 }
 
