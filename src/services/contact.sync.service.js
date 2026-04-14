@@ -2,26 +2,20 @@ const crypto = require('crypto');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const mappingService = require('./mapping.service');
+const companySyncService = require('./company.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
 
-/**
- * --- UTILIDADES DE NORMALIZACIÓN Y HASH ---
- */
 function normalizeHsContactToQb(hsContact, qbParentId) {
   const props = hsContact.properties || {};
-  const firstName = props.firstname || "";
-  const lastName = props.lastname || "";
   const email = props.email || "";
-  
-  let displayName = `${firstName} ${lastName}`.trim();
+  let displayName = `${props.firstname || ""} ${props.lastname || ""}`.trim();
   if (!displayName) displayName = email;
 
   return {
-    email, firstName, lastName,
-    phone: props.phone || "",
-    mobile: props.hs_whatsapp_phone_number || "",
+    email, firstName: props.firstname || "", lastName: props.lastname || "",
+    phone: props.phone || "", mobile: props.hs_whatsapp_phone_number || "",
     address: props.address || "", city: props.city || "",
     state: props.state || "", zip: props.zip || "",
     country: props.country || "", parentRef: qbParentId, displayName
@@ -33,88 +27,84 @@ function generateHash(payload) {
 }
 
 /**
- * --- SINCRONIZACIÓN HS -> QB ---
+ * --- HS -> QB ---
  */
 async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
+  if (echoSuppression.wasCreatedInHs(hsContactId)) {
+    logger.info(`♻️ [Echo Check] Ignorando evento de Contacto HS ID ${hsContactId} (generado internamente).`);
+    return null;
+  }
+  
   logger.info(`[Sync] Procesando Contacto HS ID: ${hsContactId}`, { source: 'HUBSPOT', entity: 'contact', entityId: hsContactId, tenantId });
 
   const hsContact = await hubspotClient.getContactDetails(hsContactId);
-  if (!hsContact || !hsContact.properties?.email) {
-    logger.warn(`⚠️ Contacto HS ${hsContactId} sin datos válidos o email. Ignorando.`);
-    return null;
-  }
+  if (!hsContact || !hsContact.properties?.email) return null;
 
   let qbParentId = null;
   const associatedCompanyIds = await hubspotClient.getContactAssociatedCompanyIds(hsContactId);
   if (associatedCompanyIds.length > 0) {
-    const hsCompanyId = associatedCompanyIds[0];
-    const companyMapping = await mappingService.findByHsId(tenantId, 'company', hsCompanyId);
-    if (companyMapping && companyMapping.qbId) qbParentId = companyMapping.qbId;
+    const mapping = await mappingService.findByHsId(tenantId, 'company', associatedCompanyIds[0]);
+    if (mapping && mapping.qbId) qbParentId = mapping.qbId;
   }
 
   const normalizedData = normalizeHsContactToQb(hsContact, qbParentId);
   const newHash = generateHash(normalizedData);
   const mapping = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
-
   let qbCustomerId = null;
 
-  // CASO A: ACTUALIZACIÓN (Ya existe mapping)
   if (mapping && mapping.qbId) {
     qbCustomerId = mapping.qbId;
-
     if (mapping.payloadHash === newHash) {
-      logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`, { qbCustomerId });
+      logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`);
       return { qbCustomerId };
     }
 
     logger.info(`📝 Cambios detectados. Actualizando cliente en QB...`);
+    
+    // 🛡️ FIX (Error 400): Traer el SyncToken más reciente justo antes de actualizar
+    const currentQbData = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+    if (!currentQbData) {
+      logger.warn(`⚠️ Cliente QB ${qbCustomerId} no encontrado (Borrado). No se puede actualizar.`);
+      return { qbCustomerId };
+    }
+
     echoSuppression.markAsCreatedInQb(qbCustomerId);
-    const updated = await quickbooksClient.updateCustomer(qbCustomerId, mapping.qbSyncToken, normalizedData);
+    const updated = await quickbooksClient.updateCustomer(qbCustomerId, currentQbData.SyncToken, normalizedData);
     
     await mappingService.upsertMapping({
       tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
       qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
     });
-
   } else {
-    // CASO B: CREACIÓN
     let existingQbCustomer = await quickbooksClient.findCustomerByEmail(normalizedData.email);
-    
     if (!existingQbCustomer) {
       existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
       if (existingQbCustomer) normalizedData.displayName = `${normalizedData.displayName} (${normalizedData.email})`;
     }
 
     if (!existingQbCustomer) {
-      logger.info(`✨ Contacto no existe en QB. Creando nuevo cliente...`);
       existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
       echoSuppression.markAsCreatedInQb(existingQbCustomer.Id);
     }
-
     qbCustomerId = existingQbCustomer.Id;
 
     await mappingService.upsertMapping({
       tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
       qbSyncToken: existingQbCustomer.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
     });
-
     echoSuppression.markAsCreatedInHs(hsContactId);
     await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
   }
-
   return { qbCustomerId };
 }
 
 /**
- * --- SINCRONIZACIÓN QB -> HS ---
+ * --- QB -> HS ---
  */
 async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENANT_ID) {
-  logger.info(`[Sync] Sincronizando Customer QB ID: ${qbCustomerId} hacia HubSpot`, { source: 'QUICKBOOKS', entity: 'contact', entityId: qbCustomerId, tenantId });
+  logger.info(`[Sync] Evaluando Customer QB ID: ${qbCustomerId}`, { source: 'QUICKBOOKS', entity: 'contact', entityId: qbCustomerId, tenantId });
 
-  if (echoSuppression.wasCreatedInQb(qbCustomerId)) {
-    logger.info(`♻️ [Echo Check] Ignorando cambio en QB ID ${qbCustomerId} (generado internamente).`);
-    return;
-  }
+  if (echoSuppression.wasCreatedInQb(qbCustomerId)) return;
 
   const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
   if (!qbCustomer) return;
@@ -140,7 +130,6 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       if (mapping.payloadHash === newHash) {
         logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en HS.`);
       } else {
-        logger.info(`✅ Contacto HS encontrado. Actualizando...`);
         echoSuppression.markAsCreatedInHs(hsContactId);
         await hubspotClient.updateContact(hsContactId, hsProps);
         await mappingService.upsertMapping({
@@ -149,9 +138,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
         });
       }
     } else {
-      logger.info(`✨ Contacto no mapeado. Buscando/Creando en HS...`);
       let existingHsContact = hsProps.email ? (await hubspotClient.getAllContacts()).find(c => c.properties.email === hsProps.email) : null;
-      
       if (existingHsContact) {
         hsContactId = existingHsContact.id;
         await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
@@ -159,7 +146,6 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
         const newContact = await hubspotClient.createSingleContact(hsProps, qbCustomerId);
         hsContactId = newContact.id;
       }
-
       echoSuppression.markAsCreatedInHs(hsContactId);
       await mappingService.upsertMapping({
         tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
@@ -167,7 +153,6 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       });
     }
 
-    // MANEJO DE ASOCIACIÓN (Padre/Hijo)
     if (hsContactId && qbCustomer.ParentRef) {
       const parentMapping = await mappingService.findByQbId(tenantId, 'company', qbCustomer.ParentRef.value);
       if (parentMapping && parentMapping.hsId) {
@@ -178,12 +163,11 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
         }
       }
     }
-
   } else {
     // --- FLUJO DE EMPRESA ---
-    logger.info(`🏢 Identificado como EMPRESA. Delegando al servicio de empresas...`);
-    // Aquí invocaremos al company.sync.service cuando lo refactoricemos.
-    // Por ahora, simplemente registramos que la lógica lo identificó correctamente.
+    logger.info(`🏢 Identificado como EMPRESA. Ejecutando servicio de empresas...`);
+    // 🔗 FIX: Llamamos al servicio de empresas y le pasamos el control
+    await companySyncService.syncCompanyFromQuickbooks(qbCustomerId, tenantId);
   }
 }
 

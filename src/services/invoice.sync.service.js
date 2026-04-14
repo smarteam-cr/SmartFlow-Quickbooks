@@ -1,281 +1,210 @@
+// src/services/invoice.sync.service.js
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const contactSyncService = require('./contact.sync.service');
+const productSyncService = require('./product.sync.service');
+const mappingService = require('./mapping.service');
 const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
+const { DEFAULT_TENANT_ID } = require('../config/constants');
 
-async function syncInvoiceToQuickbooks(invoiceId) {
-  logger.info(`[Sync] Iniciando Sincronización de Factura HS ID: ${invoiceId}`, { source: 'HUBSPOT', entity: 'invoice', entityId: invoiceId });
+/**
+ * --- HS -> QB (Facturas) ---
+ * Se dispara cuando una factura está marcada como pagada en HS.
+ */
+async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) {
+  logger.info(`[Sync] Sincronización Factura HS ID: ${invoiceId}`, { source: 'HUBSPOT', entity: 'invoice', entityId: invoiceId, tenantId });
 
   try {
-    // 1. Obtener la factura y validar idempotencia
+    // 1. Verificar si ya existe el mapeo
+    const mapping = await mappingService.findByHsId(tenantId, 'invoice', invoiceId);
+    if (mapping && mapping.qbId) {
+      logger.info(`ℹ️ Factura HS ${invoiceId} ya tiene mapping (QB ID: ${mapping.qbId}). Omitiendo creación.`);
+      return mapping.qbId;
+    }
+
+    // 2. Obtener la factura y validar reglas de negocio
     const hsInvoice = await hubspotClient.getInvoiceDetails(invoiceId);
     if (!hsInvoice) throw new Error(`La factura ${invoiceId} no existe en HubSpot.`);
 
     const balance = Number(hsInvoice.properties.hs_balance_due || 0);
     if (balance > 0) {
-      logger.warn(`🛑 [Business Rule] Factura ${invoiceId} con saldo de $${balance}. No está 100% pagada. Abortando creación en QB.`);
+      logger.warn(`🛑 [Regla] Factura ${invoiceId} con saldo pendiente (${balance}). No se sincroniza.`);
       return null;
     }
 
-    // 1.2 Validar que NO sea un borrador vacío (Verificamos si tiene productos reales)
     const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
     if (lineItemAssociations.length === 0) {
-      logger.warn(`🛑 [Business Rule] Factura ${invoiceId} no tiene productos (Line Items). Es un borrador vacío. Abortando creación en QB.`);
+      logger.warn(`🛑 [Regla] Factura ${invoiceId} sin productos. Omitiendo.`);
       return null;
     }
 
-    if (hsInvoice.properties.id_factura_quickbooks) {
-      logger.info(`Factura HS ${invoiceId} ya existe en QuickBooks (ID: ${hsInvoice.properties.id_factura_quickbooks}). Omitiendo.`);
-      return hsInvoice.properties.id_factura_quickbooks;
-    }
-
-    // 2. Obtener y validar el Contacto Asociado
+    // 3. Resolución de CONTACTO
     const contactAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'contacts');
     if (contactAssociations.length === 0) {
-      throw new Error(`La factura ${invoiceId} no tiene un Contacto asociado en HubSpot. QuickBooks exige un Customer.`);
+      throw new Error(`La factura ${invoiceId} no tiene un Contacto asociado.`);
     }
 
     const contactId = contactAssociations[0];
-    logger.info(`Procesando Contacto Asociado (ID: ${contactId})...`);
+    const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId, tenantId);
+    if (!qbCustomerId) throw new Error(`No se pudo resolver el Customer Ref para ${contactId}`);
 
-    const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId);
-    if (!qbCustomerId) throw new Error(`No se pudo resolver el ID de QuickBooks para el contacto ${contactId}`);
-
-    // 3. Procesar los Productos (Ya los buscamos arriba, así que solo obtenemos los detalles)
-    logger.info(`Procesando ${lineItemAssociations.length} Productos (Line Items)...`);
+    // 4. Resolución de PRODUCTOS (Line Items)
+    logger.info(`📦 Procesando ${lineItemAssociations.length} Line Items...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
-
     const qbInvoiceLines = [];
-    let facturaLlevaImpuestos = false;
 
     for (const item of lineItemsData) {
-      let qbItemId = item.properties.id_producto_quickbooks;
-
-      if (!qbItemId) {
-        logger.info(`El producto "${item.properties.name}" no está en QuickBooks. Creándolo...`);
-        const existingQbItem = await quickbooksClient.findItemByName(item.properties.name);
-        if (existingQbItem) {
-          qbItemId = existingQbItem.Id;
-        } else {
-          const newItem = await quickbooksClient.createItem({
-            Name: item.properties.name,
-            Type: "Service",
-            UnitPrice: item.properties.price ? Number(item.properties.price) : 0,
-            IncomeAccountRef: { value: require('../config').quickbooks.incomeAccountId.toString() }
-          });
-          qbItemId = newItem.Id;
-        }
-      }
-
-      if (item.properties.es_gravable === "true") {
-        facturaLlevaImpuestos = true;
-      }
-
+      // Usamos el servicio de productos para garantizar que el producto exista y esté mapeado
+      const { qbItemId } = await productSyncService.processProduct(item.id, tenantId);
       const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
       qbInvoiceLines.push(mappedLine);
     }
 
+    // 5. Mapeo y Creación en QB
     const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
-
-    if (facturaLlevaImpuestos) {
-      logger.info('Se detectaron productos gravables.');
-    }
-
-   logger.info(`📝 Enviando Factura a QuickBooks por un subtotal estimado de $${hsInvoice.properties.hs_invoice_total || 'N/A'}...`);
-
+    
+    logger.info(`📝 Creando factura en QuickBooks...`);
     const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);
-
     const qbInvoiceId = newQbInvoice.Id;
-    const qbDocNumber = newQbInvoice.DocNumber;
-    const qbSyncToken = newQbInvoice.SyncToken;
-    const qbTotalAmt = newQbInvoice.TotalAmt;
-    const qbBalance = newQbInvoice.Balance;
-    
-    // Extracción segura del impuesto total
-    const qbTaxAmount = newQbInvoice.TxnTaxDetail && newQbInvoice.TxnTaxDetail.TotalTax 
-      ? newQbInvoice.TxnTaxDetail.TotalTax 
-      : 0;
 
     echoSuppression.markAsCreatedInQb(qbInvoiceId);
 
-    // Mapeo hacia las nuevas propiedades en HubSpot
-    const propiedadesParaActualizar = {
+    // 6. Registro de Mapping
+    const qbTaxAmount = newQbInvoice.TxnTaxDetail?.TotalTax || 0;
+    
+    await mappingService.upsertMapping({
+      tenantId,
+      entityType: 'invoice',
+      hsId: invoiceId,
+      qbId: qbInvoiceId,
+      qbSyncToken: newQbInvoice.SyncToken,
+      sourceSystem: 'HUBSPOT'
+    });
+
+    // 7. Feedback a HubSpot (Propiedades espejo)
+    const updateProps = {
       id_factura_quickbooks: qbInvoiceId.toString(),
-      sistema_de_origen: "Quickbooks",
-      numero_factura_qb: qbDocNumber,
-      estado_de_factura_qb: 'Borrador',
-      qb_sync_token: qbSyncToken,
-      qb_total_amount: qbTotalAmt.toString(),
-      saldo_pendiente_qb: qbBalance.toString(),
-      qb_tax_amount: qbTaxAmount.toString()
+      numero_factura_qb: newQbInvoice.DocNumber,
+      qb_total_amount: newQbInvoice.TotalAmt.toString(),
+      saldo_pendiente_qb: newQbInvoice.Balance.toString(),
+      qb_tax_amount: qbTaxAmount.toString(),
+      qb_sync_token: newQbInvoice.SyncToken
     };
 
-    logger.info(`🔗 Enlazando datos financieros oficiales (Total: $${qbTotalAmt}, Impuestos: $${qbTaxAmount}) a HubSpot...`);
-    await hubspotClient.updateInvoice(invoiceId, propiedadesParaActualizar);
+    echoSuppression.markAsCreatedInHs(invoiceId);
+    await hubspotClient.updateInvoice(invoiceId, updateProps);
     
-    // 5. Conciliación de Pagos 
+    // 8. Conciliación de Pagos
     const paymentSyncService = require('./payment.sync.service');
-    logger.info(`⏳ Iniciando conciliación de pagos para la nueva factura...`);
-    await paymentSyncService.reconcilePaymentsForInvoice(invoiceId, qbInvoiceId);
+    await paymentSyncService.reconcilePaymentsForInvoice(invoiceId, qbInvoiceId, tenantId);
 
-    logger.info(`🎉 Factura sincronizada y enlazada correctamente: QB ${qbInvoiceId} <-> HS ${invoiceId}`);
-
+    logger.info(`🎉 Factura sincronizada correctamente: QB ${qbInvoiceId}`);
     return qbInvoiceId;
+
   } catch (error) {
-    logger.error(`Error en la sincronización de la factura HS ${invoiceId}:`, error);
+    logger.error(`❌ Error sincronizando factura HS ${invoiceId}:`, error);
     throw error;
   }
 }
 
 /**
- * --- SINCRONIZACIÓN QB -> HS ---
- * Actualiza los saldos y estados de una factura en HubSpot desde QuickBooks.
+ * --- QB -> HS (Actualización de Estado) ---
  */
-async function syncInvoiceFromQuickbooks(qbInvoiceId) {
-  logger.info(`[Sync] Actualizando Factura QB ID: ${qbInvoiceId} hacia HubSpot`, { source: 'QUICKBOOKS', entity: 'invoice', entityId: qbInvoiceId });
+async function syncInvoiceFromQuickbooks(qbInvoiceId, tenantId = DEFAULT_TENANT_ID) {
+  if (echoSuppression.wasCreatedInQb(qbInvoiceId)) return;
 
-  try {
-    if (echoSuppression.wasCreatedInQb(qbInvoiceId)) {
-      logger.info(`♻️ [Echo] Ignorando factura QB ${qbInvoiceId} (cambio interno).`);
-      return;
-    }
+  logger.info(`[Sync] Actualizando Factura QB ID: ${qbInvoiceId} -> HS`, { source: 'QUICKBOOKS', entity: 'invoice', entityId: qbInvoiceId, tenantId });
 
-    // 1. Obtener los detalles de la factura desde QuickBooks
-    const qbInvoice = await quickbooksClient.getInvoice(qbInvoiceId);
-    if (!qbInvoice) {
-      logger.warn(`[Invoice Sync] ⚠️ No se encontró la factura QB ${qbInvoiceId} en QuickBooks.`);
-      return;
-    }
+  const qbInvoice = await quickbooksClient.getInvoice(qbInvoiceId).catch(() => null);
+  if (!qbInvoice) return;
 
-    // 2. Buscar la factura en HubSpot usando nuestra propiedad ancla
-    const hsInvoice = await hubspotClient.searchInvoiceByCustomProperty('id_factura_quickbooks', qbInvoiceId);
-    if (!hsInvoice) {
-      logger.error(`[Invoice Sync] ❌ No se encontró en HubSpot factura con ID QB: ${qbInvoiceId}`);
-      return;
-    }
+  const mapping = await mappingService.findByQbId(tenantId, 'invoice', qbInvoiceId);
+  const hsInvoiceId = mapping ? mapping.hsId : (await hubspotClient.searchInvoiceByCustomProperty('id_factura_quickbooks', qbInvoiceId))?.id;
 
-    // 3. Evaluar saldos
-    const amountPaid = qbInvoice.TotalAmt - qbInvoice.Balance;
-    const remainingBalance = qbInvoice.Balance;
-
-    // 4. Preparar propiedades
-    const propertiesToUpdate = {
-      importe_pagado_qb: amountPaid.toString(),
-      saldo_pendiente_qb: remainingBalance.toString()
-    };
-
-    // Lógica de estado según saldos y envío por email
-    if (remainingBalance === 0) {
-      propertiesToUpdate.estado_de_factura_qb = 'Pagada';
-    } else if (amountPaid > 0) {
-      propertiesToUpdate.estado_de_factura_qb = 'Emitida';
-    } else if (qbInvoice.EmailStatus === 'EmailSent') {
-      propertiesToUpdate.estado_de_factura_qb = 'Enviada';
-    } else {
-      propertiesToUpdate.estado_de_factura_qb = 'Borrador';
-    }
-
-    // 5. Enviar el PATCH a HubSpot
-    logger.info(`[Invoice Sync] Actualizando saldos y estado (${propertiesToUpdate.estado_de_factura_qb}) en HS para factura ${hsInvoice.id}...`);
-    await hubspotClient.updateInvoice(hsInvoice.id, propertiesToUpdate);
-
-    logger.info(`[Invoice Sync] ✅ Factura HS ${hsInvoice.id} actualizada correctamente.`);
-
-  } catch (error) {
-    logger.error(`[Invoice Sync] ❌ Error sincronizando factura QB ${qbInvoiceId} hacia HubSpot:`, error);
-    throw error;
+  if (!hsInvoiceId) {
+    logger.warn(`⚠️ Factura QB ${qbInvoiceId} no encontrada en HubSpot. Omitiendo actualización de saldos.`);
+    return;
   }
+
+  // Lógica de saldos y estados
+  const amountPaid = qbInvoice.TotalAmt - qbInvoice.Balance;
+  const propertiesToUpdate = {
+    importe_pagado_qb: amountPaid.toString(),
+    saldo_pendiente_qb: qbInvoice.Balance.toString(),
+    qb_sync_token: qbInvoice.SyncToken
+  };
+
+  if (qbInvoice.Balance === 0) propertiesToUpdate.estado_de_factura_qb = 'Pagada';
+  else if (amountPaid > 0) propertiesToUpdate.estado_de_factura_qb = 'Emitida';
+  else propertiesToUpdate.estado_de_factura_qb = 'Borrador';
+
+  echoSuppression.markAsCreatedInHs(hsInvoiceId);
+  await hubspotClient.updateInvoice(hsInvoiceId, propertiesToUpdate);
+
+  await mappingService.upsertMapping({
+    tenantId, 
+    entityType: 'invoice', 
+    hsId: hsInvoiceId, 
+    qbId: qbInvoiceId,
+    qbSyncToken: qbInvoice.SyncToken,
+    sourceSystem: 'QUICKBOOKS'
+  });
 }
 
 /**
- * --- SINCRONIZACIÓN HS -> QB (ACTUALIZACIÓN) ---
- * Escucha cambios en HubSpot y los refleja en una factura ya existente en QuickBooks.
+ * --- HS -> QB (Update) ---
  */
-async function syncHubSpotInvoiceToQuickbooks(invoiceId) {
-  logger.info(`[Sync] Actualizando Factura HS ID: ${invoiceId} hacia QuickBooks`, { source: 'HUBSPOT', entity: 'invoice', entityId: invoiceId });
+async function syncHubSpotInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) {
+  if (echoSuppression.wasCreatedInHs(invoiceId)) return;
 
-  try {
-    // 1. Obtener datos de la factura en HS
-    const hsInvoice = await hubspotClient.getInvoiceDetails(invoiceId);
-    if (!hsInvoice) throw new Error(`La factura ${invoiceId} no existe en HubSpot.`);
+  logger.info(`[Sync] Actualizando Factura HS ID: ${invoiceId} -> QB`);
 
-    const qbInvoiceId = hsInvoice.properties.id_factura_quickbooks;
-    if (!qbInvoiceId) {
-      logger.info(`ℹ️ Factura HS ${invoiceId} aún no tiene ID de QB. Este evento se omite, la creación la maneja object.creation.`);
-      return;
-    }
+  const hsInvoice = await hubspotClient.getInvoiceDetails(invoiceId);
+  if (!hsInvoice) return;
 
-    // 🛡️ REGLA DE SEGURIDAD: Solo editar si está "Abierta" o sin estado
-    const currentStatus = hsInvoice.properties.estado_de_factura_qb;
-    if (currentStatus && currentStatus !== 'Abierta' && currentStatus !== '') {
-      logger.warn(`🛑 Bloqueo Contable: No se puede editar la factura HS ${invoiceId} porque su estado es "${currentStatus}".`);
-      return;
-    }
+  const mapping = await mappingService.findByHsId(tenantId, 'invoice', invoiceId);
+  if (!mapping || !mapping.qbId) return;
 
-    // 2. Obtener el SyncToken actual desde QuickBooks
-    logger.info(`🔍 Obteniendo estado actual de la factura QB ${qbInvoiceId} en QuickBooks...`);
-    const existingQbInvoice = await quickbooksClient.getInvoice(qbInvoiceId);
-    if (!existingQbInvoice) {
-      throw new Error(`La factura QB ${qbInvoiceId} no existe en QuickBooks.`);
-    }
-    const syncToken = existingQbInvoice.SyncToken;
+  const qbInvoiceId = mapping.qbId;
 
-    // 3. Resolver Contacto Actual (por si cambió)
-    const contactAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'contacts');
-    let qbCustomerId = existingQbInvoice.CustomerRef.value; // Por defecto el actual
-    let contactInfo = null;
-
-    if (contactAssociations.length > 0) {
-      const contactId = contactAssociations[0];
-      const resolution = await contactSyncService.processContact(contactId);
-      qbCustomerId = resolution.qbCustomerId;
-      contactInfo = resolution.contactInfo;
-    }
-
-    // 4. Resolver Productos Actuales (sobrescritura completa para consistencia)
-    const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
-    logger.info(`📦 Refrescando ${lineItemAssociations.length} productos...`);
-
-    const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
-    const qbInvoiceLines = [];
-
-    for (const item of lineItemsData) {
-      let qbItemId = item.properties.id_producto_quickbooks;
-
-      if (!qbItemId) {
-        const existingQbItem = await quickbooksClient.findItemByName(item.properties.name);
-        if (existingQbItem) {
-          qbItemId = existingQbItem.Id;
-        } else {
-          const newItem = await quickbooksClient.createItem({
-            Name: item.properties.name,
-            Type: "Service",
-            UnitPrice: item.properties.price ? Number(item.properties.price) : 0,
-            IncomeAccountRef: { value: require('../config').quickbooks.incomeAccountId.toString() }
-          });
-          qbItemId = newItem.Id;
-        }
-      }
-
-      const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
-      qbInvoiceLines.push(mappedLine);
-    }
-
-    // 5. Mapear Payload y Actualizar
-    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
-
-    logger.info(`📝 Enviando actualización a QuickBooks (QB ID: ${qbInvoiceId})...`);
-    echoSuppression.markAsCreatedInQb(qbInvoiceId);
-    await quickbooksClient.updateInvoice(qbInvoiceId, syncToken, qbInvoicePayload);
-
-    logger.info(`✅ Factura HS ${invoiceId} actualizada correctamente en QuickBooks.`);
-
-  } catch (error) {
-    logger.error(`❌ Error actualizando factura HS ${invoiceId} hacia QuickBooks:`, error);
-    throw error;
+  // 🛡️ REGLA: Bloqueo contable
+  const currentStatus = hsInvoice.properties.estado_de_factura_qb;
+  if (currentStatus && !['Abierta', 'Borrador', ''].includes(currentStatus)) {
+    logger.warn(`🛑 Bloqueo Contable: Factura HS ${invoiceId} está en estado "${currentStatus}". No se puede editar.`);
+    return;
   }
+
+  // 🛡️ FIX: SyncToken Fresco
+  const existingQb = await quickbooksClient.getInvoice(qbInvoiceId).catch(() => null);
+  if (!existingQb) return;
+
+  // Re-resolver asociación de contacto si es necesario
+  const contactAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'contacts');
+  const contactId = contactAssociations[0];
+  const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId, tenantId);
+
+  // Re-resolver line items
+  const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
+  const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
+  const qbInvoiceLines = [];
+
+  for (const item of lineItemsData) {
+    const { qbItemId } = await productSyncService.processProduct(item.id, tenantId);
+    qbInvoiceLines.push(qbMapper.mapLineItemToQb(item, qbItemId));
+  }
+
+  const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
+
+  logger.info(`📝 Enviando actualización a QuickBooks (QB ID: ${qbInvoiceId})...`);
+  echoSuppression.markAsCreatedInQb(qbInvoiceId);
+  const updated = await quickbooksClient.updateInvoice(qbInvoiceId, existingQb.SyncToken, qbInvoicePayload);
+
+  await mappingService.upsertMapping({
+    tenantId, entityType: 'invoice', hsId: invoiceId, qbId: qbInvoiceId,
+    qbSyncToken: updated.SyncToken, sourceSystem: 'HUBSPOT'
+  });
 }
 
 module.exports = {

@@ -296,18 +296,9 @@ async function updateProductProperty(productId, qbId) {
   }
 }
 
-async function createProduct(productData) {
+async function createProduct(properties) {
   try {
-    const payload = {
-      properties: {
-        name: productData.name,
-        price: productData.price ? productData.price.toString() : "0",
-        description: productData.description || "",
-        hs_sku: productData.hs_sku || "",
-        es_gravable: productData.isTaxable ? "true" : "false",
-        id_producto_quickbooks: productData.qbId.toString()
-      }
-    };
+    const payload = { properties };
     const response = await hsClient.post("/crm/v3/objects/products", payload);
     return response.data;
   } catch (error) {

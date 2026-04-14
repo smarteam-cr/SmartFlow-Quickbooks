@@ -1,197 +1,193 @@
-const config = require('../config');
+// src/services/product.sync.service.js
+const crypto = require('crypto');
 const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
+const mappingService = require('./mapping.service');
 const echoSuppression = require('../utils/echo.suppression.util');
-const mutex = require('../utils/mutex.util');
 const logger = require('../lib/logger.lib');
+const Tenant = require('../db/models/tenant.model');
+const { DEFAULT_TENANT_ID } = require('../config/constants');
 
 /**
- * --- SINCRONIZACIÓN HS -> QB ---
- * Procesa la creación o actualización de un producto desde HubSpot.
+ * Obtiene la cuenta contable de ingresos configurada para este cliente
  */
-async function _internalSyncProductToQuickbooks(hsProductId) {
-    logger.info(`[Sync] Procesando Producto HS ID: ${hsProductId}`, { source: 'HUBSPOT', entity: 'product', entityId: hsProductId });
-
-    // 1. Supresión de Eco
-    if (echoSuppression.wasCreatedInHs(hsProductId)) {
-        logger.info(`♻️ [Echo] Ignorando producto ${hsProductId} (cambio interno).`);
-        return;
-    }
-
-    try {
-        // 2. Obtener datos de HubSpot
-        const hsProduct = await hubspotClient.getProductDetails(hsProductId);
-        if (!hsProduct) {
-            logger.warn(`❌ Producto ${hsProductId} no encontrado en HubSpot.`);
-            return;
-        }
-
-        const {
-            name,
-            description,
-            hs_sku,
-            price,
-            hs_price_usd,
-            es_gravable,
-            id_producto_quickbooks
-        } = hsProduct.properties;
-
-        // Priorizamos hs_price_usd sobre price si existe
-        const finalPrice = hs_price_usd ? Number(hs_price_usd) : (price ? Number(price) : 0);
-        const isTaxable = es_gravable === "true" || es_gravable === true;
-
-        // 3. Mapeo para QuickBooks
-        const itemData = {
-            Name: name,
-            Description: description || "",
-            UnitPrice: finalPrice,
-            Sku: hs_sku || "",
-            Taxable: isTaxable,
-            Active: true,
-            Type: "Service", // O "Inventory" según configuración, por defecto "Service"
-            IncomeAccountRef: {
-                value: config.quickbooks.incomeAccountId.toString()
-            }
-        };
-
-        // 4. Resolución de Idempotencia y Existencia
-        let qbItemId = null;
-        let existingItem = null;
-
-        if (id_producto_quickbooks) {
-            existingItem = await quickbooksClient.getItemById(id_producto_quickbooks).catch(() => null);
-        }
-
-        if (!existingItem && name) {
-            logger.info(`🔍 Buscando producto en QB por nombre: "${name}"...`);
-            existingItem = await quickbooksClient.findItemByName(name);
-        }
-
-        // 5. Lógica de Sincronización
-        if (existingItem) {
-            qbItemId = existingItem.Id;
-            const qbSyncToken = existingItem.SyncToken;
-
-            logger.info(`🔄 Producto ENCONTRADO (QB ID: ${qbItemId}). Validando cambios reales...`);
-
-            // --- DEEP COMPARE ---
-            const hasRealChanges = 
-                (itemData.Name !== (existingItem.Name || "")) ||
-                (itemData.Description !== (existingItem.Description || "")) ||
-                (Math.abs(itemData.UnitPrice - (existingItem.UnitPrice || 0)) > 0.01) ||
-                (itemData.Sku !== (existingItem.Sku || "")) ||
-                (itemData.Taxable !== (existingItem.Taxable || false));
-
-            if (!hasRealChanges) {
-                logger.info(`⏩ Sin cambios reales. Omitiendo actualización en QuickBooks (ECO).`);
-            } else {
-                logger.info(`📝 Cambios detectados. Actualizando producto en QuickBooks...`);
-                echoSuppression.markAsCreatedInQb(qbItemId);
-                await quickbooksClient.updateItem(qbItemId, qbSyncToken, itemData);
-            }
-        } else {
-            // === CREACIÓN ===
-            logger.info(`✨ Creando nuevo producto en QuickBooks: "${name}"...`);
-            const newQbItem = await quickbooksClient.createItem(itemData);
-            qbItemId = newQbItem.Id;
-            echoSuppression.markAsCreatedInQb(qbItemId);
-            logger.info(`✅ Producto creado en QB con ID: ${qbItemId}`);
-        }
-
-        // 6. Vincular el ID en HubSpot si es necesario
-        if (qbItemId && (!id_producto_quickbooks || id_producto_quickbooks !== qbItemId.toString())) {
-            logger.info(`🔗 Enlazando ID de QuickBooks ${qbItemId} en HubSpot...`);
-            echoSuppression.markAsCreatedInHs(hsProductId);
-            await hubspotClient.updateProductProperty(hsProductId, qbItemId);
-        }
-    } catch (error) {
-        logger.error(`❌ Error sincronizando producto HS ${hsProductId} a QuickBooks:`, error);
-        throw error;
-    }
+async function getIncomeAccountId(tenantId) {
+  const tenant = await Tenant.findOne({ tenantId });
+  return tenant?.preferences?.incomeAccountId || '79';
 }
 
 /**
- * --- SINCRONIZACIÓN QB -> HS ---
- * Procesa la creación o actualización de un producto desde QuickBooks.
+ * Normalización HS -> QB (Productos a Items)
+ * Incluye la transformación del string de HubSpot a Booleano para QB
  */
-async function _internalSyncProductFromQuickbooks(qbItemId) {
-    logger.info(`[Sync] Sincronizando Item QB ID: ${qbItemId} hacia HubSpot`, { source: 'QUICKBOOKS', entity: 'product', entityId: qbItemId });
+function normalizeHsProductToQb(hsProduct, incomeAccountId) {
+  const props = hsProduct.properties || {};
+  const isTaxable = props.es_gravable === 'true' || props.es_gravable === true; 
 
-    // 1. Supresión de Eco
-    if (echoSuppression.wasCreatedInQb(qbItemId)) {
-        logger.info(`♻️ [Echo] Ignorando item ${qbItemId} (cambio interno).`);
-        return;
+  return {
+    Name: props.name || `Product-${hsProduct.id}`,
+    Description: props.description || "",
+    UnitPrice: props.price ? Number(props.price) : 0,
+    Sku: props.hs_sku || "",
+    Type: 'Service', 
+    Taxable: isTaxable,
+    IncomeAccountRef: {
+      value: incomeAccountId
     }
-
-    try {
-        // 2. Obtener datos de QuickBooks
-        const qbItem = await quickbooksClient.getItemById(qbItemId);
-        if (!qbItem) {
-            logger.error(`❌ No se encontró el Item ${qbItemId} en QuickBooks.`);
-            return;
-        }
-
-        // 3. Buscar en HubSpot
-        let hsProduct = await hubspotClient.searchProductByQbId(qbItemId);
-
-        const properties = {
-            name: qbItem.Name,
-            price: (qbItem.UnitPrice || 0).toString(),
-            hs_price_usd: (qbItem.UnitPrice || 0).toString(),
-            description: qbItem.Description || "",
-            hs_sku: qbItem.Sku || "",
-            es_gravable: qbItem.Taxable ? "true" : "false",
-            id_producto_quickbooks: qbItemId.toString()
-        };
-
-        if (hsProduct) {
-            logger.info(`🔄 Producto HS encontrado (ID: ${hsProduct.id}). Validando cambios reales...`);
-
-            // --- DEEP COMPARE ---
-            const hasRealChanges = 
-                (properties.name !== (hsProduct.properties.name || "")) ||
-                (Math.abs(Number(properties.price) - Number(hsProduct.properties.price || 0)) > 0.01) ||
-                (Math.abs(Number(properties.hs_price_usd) - Number(hsProduct.properties.hs_price_usd || 0)) > 0.01) ||
-                (properties.description !== (hsProduct.properties.description || "")) ||
-                (properties.hs_sku !== (hsProduct.properties.hs_sku || "")) ||
-                (properties.es_gravable !== (hsProduct.properties.es_gravable || "false"));
-
-            if (!hasRealChanges) {
-                logger.info(`⏩ Sin cambios reales. Omitiendo actualización en HubSpot (ECO).`);
-            } else {
-                logger.info(`📝 Cambios detectados. Actualizando producto en HubSpot...`);
-                echoSuppression.markAsCreatedInHs(hsProduct.id);
-                await hubspotClient.updateProduct(hsProduct.id, properties);
-            }
-        } else {
-            // === CREACIÓN ===
-            logger.info(`✨ Producto no existe en HubSpot. Creando...`);
-            const newHsProduct = await hubspotClient.createProduct({
-                ...properties,
-                isTaxable: qbItem.Taxable,
-                qbId: qbItemId
-            });
-            echoSuppression.markAsCreatedInHs(newHsProduct.id);
-            logger.info(`✅ Producto creado en HS (ID: ${newHsProduct.id})`);
-        }
-    } catch (error) {
-        logger.error(`❌ Error sincronizando Item QB ${qbItemId} hacia HubSpot:`, error);
-        throw error;
-    }
+  };
 }
 
 /**
- * Wrappers con Mutex
+ * Normalización QB -> HS (Items a Productos)
+ * Incluye la transformación del Booleano de QB a string para HS
  */
-async function syncProductToQuickbooks(hsProductId) {
-    return await _internalSyncProductToQuickbooks(hsProductId);
+function normalizeQbItemToHs(qbItem) {
+  return {
+    name: qbItem.Name || "",
+    description: qbItem.Description || "",
+    price: qbItem.UnitPrice ? String(qbItem.UnitPrice) : "0",
+    hs_sku: qbItem.Sku || "",
+    es_gravable: qbItem.Taxable ? "true" : "false",
+    id_producto_quickbooks: qbItem.Id.toString()
+  };
 }
 
-async function syncProductFromQuickbooks(qbItemId) {
-    return await _internalSyncProductFromQuickbooks(qbItemId);
+function generateHash(payload) {
+  return crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex');
 }
 
-module.exports = {
-    syncProductToQuickbooks,
-    syncProductFromQuickbooks
-};
+/**
+ * --- SINCRONIZACIÓN HS -> QB (Productos) ---
+ */
+async function processProduct(hsProductId, tenantId = DEFAULT_TENANT_ID) {
+  // 🛡️ CAPA 2: SUPRESIÓN DE ECO
+  if (echoSuppression.wasCreatedInHs(hsProductId)) {
+    logger.info(`♻️ [Echo Check] Ignorando evento de Producto HS ID ${hsProductId} (generado internamente).`);
+    return null;
+  }
+
+  logger.info(`[Sync] Procesando Producto HS ID: ${hsProductId}`, { source: 'HUBSPOT', entity: 'product', entityId: hsProductId, tenantId });
+
+  const product = await hubspotClient.getProductDetails(hsProductId).catch(() => null);
+  if (!product) {
+    logger.warn(`⚠️ Producto HS ${hsProductId} no encontrado (Posiblemente borrado).`);
+    return null;
+  }
+
+  const incomeAccountId = await getIncomeAccountId(tenantId);
+  const normalizedData = normalizeHsProductToQb(product, incomeAccountId);
+  const newHash = generateHash(normalizedData);
+  
+  const mapping = await mappingService.findByHsId(tenantId, 'product', hsProductId);
+  let qbItemId = null;
+
+  // CASO A: ACTUALIZACIÓN
+  if (mapping && mapping.qbId) {
+    qbItemId = mapping.qbId;
+    if (mapping.payloadHash === newHash) {
+      logger.info(`⏩ Producto sin cambios reales (Hash coincide). Omitiendo QB.`);
+      return { qbItemId };
+    }
+
+    logger.info(`📝 Actualizando producto en QuickBooks...`);
+    
+    // 🛡️ FIX: Traer SyncToken Fresco
+    const currentQbData = await quickbooksClient.getItemById(qbItemId).catch(() => null);
+    if (!currentQbData) {
+      logger.warn(`⚠️ Producto QB ${qbItemId} no encontrado. No se puede actualizar.`);
+      return { qbItemId };
+    }
+
+    echoSuppression.markAsCreatedInQb(qbItemId);
+    const updated = await quickbooksClient.updateItem(qbItemId, currentQbData.SyncToken, normalizedData);
+
+    await mappingService.upsertMapping({
+      tenantId, entityType: 'product', hsId: hsProductId, qbId: qbItemId,
+      qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+    });
+
+  } else {
+    // CASO B: CREACIÓN
+    let existingQb = await quickbooksClient.findItemByName(normalizedData.Name).catch(() => null);
+    
+    if (!existingQb) {
+      logger.info(`✨ Creando nuevo producto en QuickBooks...`);
+      existingQb = await quickbooksClient.createItem(normalizedData);
+      echoSuppression.markAsCreatedInQb(existingQb.Id);
+    } else {
+      logger.info(`🔗 Producto encontrado en QB por Nombre. Enlazando...`);
+    }
+
+    qbItemId = existingQb.Id;
+
+    await mappingService.upsertMapping({
+      tenantId, entityType: 'product', hsId: hsProductId, qbId: qbItemId,
+      qbSyncToken: existingQb.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+    });
+    
+    // 🛡️ FIX UX: Forzamos la actualización del ID de QB en HubSpot
+    echoSuppression.markAsCreatedInHs(hsProductId);
+    await hubspotClient.updateProduct(hsProductId, { id_producto_quickbooks: qbItemId }).catch(err => {
+      logger.warn(`No se pudo actualizar el ID de QB en HubSpot para el producto ${hsProductId}: ${err.message}`);
+    });
+  }
+
+  return { qbItemId };
+}
+
+/**
+ * --- SINCRONIZACIÓN QB -> HS (Productos) ---
+ */
+async function syncItemFromQuickbooks(qbItemId, tenantId = DEFAULT_TENANT_ID) {
+  // 🛡️ CAPA 2: SUPRESIÓN DE ECO
+  if (echoSuppression.wasCreatedInQb(qbItemId)) {
+    logger.info(`♻️ [Echo Check] Ignorando evento de Item QB ID ${qbItemId} (generado internamente).`);
+    return null;
+  }
+
+  logger.info(`[Sync] Sincronizando Item QB ID: ${qbItemId} hacia HubSpot`, { source: 'QUICKBOOKS', entity: 'product', entityId: qbItemId, tenantId });
+
+  const qbItem = await quickbooksClient.getItemById(qbItemId).catch(() => null);
+  if (!qbItem) return null;
+
+  if (qbItem.Type === 'Category') {
+    logger.info(`⏩ Item QB ID ${qbItemId} es una Categoría. Omitiendo.`);
+    return null;
+  }
+
+  const hsProps = normalizeQbItemToHs(qbItem);
+  const newHash = generateHash(hsProps);
+  
+  const mapping = await mappingService.findByQbId(tenantId, 'product', qbItemId);
+  let hsProductId = mapping ? mapping.hsId : null;
+
+  // CASO A: ACTUALIZACIÓN
+  if (hsProductId) {
+    if (mapping.payloadHash === newHash) {
+      logger.info(`⏩ Producto sin cambios reales (Hash coincide). Omitiendo actualización en HS.`);
+    } else {
+      logger.info(`✅ Producto HS encontrado. Actualizando...`);
+      echoSuppression.markAsCreatedInHs(hsProductId);
+      await hubspotClient.updateProduct(hsProductId, hsProps);
+      
+      await mappingService.upsertMapping({
+        tenantId, entityType: 'product', hsId: hsProductId, qbId: qbItemId,
+        qbSyncToken: qbItem.SyncToken, payloadHash: newHash, sourceSystem: 'QUICKBOOKS'
+      });
+    }
+  } else {
+    // CASO B: CREACIÓN
+    logger.info(`✨ Producto no mapeado. Creando en HS...`);
+    // 🛡️ FIX: Llamada genérica con todas las propiedades incluyendo el ID
+    const newProduct = await hubspotClient.createProduct(hsProps);
+    hsProductId = newProduct.id;
+    echoSuppression.markAsCreatedInHs(hsProductId);
+    
+    await mappingService.upsertMapping({
+      tenantId, entityType: 'product', hsId: hsProductId, qbId: qbItemId,
+      qbSyncToken: qbItem.SyncToken, payloadHash: newHash, sourceSystem: 'QUICKBOOKS'
+    });
+  }
+}
+
+module.exports = { processProduct, syncItemFromQuickbooks };

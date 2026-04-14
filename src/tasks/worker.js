@@ -1,9 +1,10 @@
-// src/tasks/worker.js
 const SyncJob = require('../db/models/job.model');
 const jobService = require('../services/job.service');
 const contactSyncService = require('../services/contact.sync.service');
 const companySyncService = require('../services/company.sync.service');
-// Nota: Importaremos productos y facturas a medida que los refactoricemos
+const productSyncService = require('../services/product.sync.service');
+const invoiceSyncService = require('../services/invoice.sync.service');
+const paymentSyncService = require('../services/payment.sync.service');
 const mutex = require('../utils/mutex.util');
 const logger = require('../lib/logger.lib');
 const config = require('../config');
@@ -13,15 +14,13 @@ const CONCURRENCY = config.worker.concurrency || 3;
 let activeJobs = 0;
 
 /**
- * Orquestador de ejecución para un Job específico
+ * Función que ejecuta la lógica real del Job
  */
 async function processJob(job) {
   const { source, entity, entityId, _id, tenantId, correlationId } = job;
   const startTime = Date.now();
 
-  logger.info(`[Worker] Iniciando Job [${_id}]`, { entity, entityId, correlationId, attempt: job.attempts + 1 });
-  
-  await jobService.markProcessing(_id);
+  logger.info(`[Worker] Iniciando Job [${_id}]`, { entity, entityId, correlationId, attempt: job.attempts });
 
   try {
     if (source === SOURCES.HUBSPOT) {
@@ -38,18 +37,12 @@ async function processJob(job) {
       correlationId, 
       stack: config.nodeEnv !== 'production' ? error.stack : undefined 
     });
-    
-    // El servicio de jobs decidirá si va a RETRY_PENDING o DEAD_LETTER
     await jobService.markFailed(_id, error.message, error.stack, error);
   }
 }
 
-/**
- * Enrutador para eventos originados en HubSpot
- */
 async function routeHubSpotJob(job) {
   const { entity, entityId, tenantId } = job;
-
   switch (entity) {
     case ENTITIES.CONTACT:
       await contactSyncService.processContact(entityId, tenantId);
@@ -57,25 +50,38 @@ async function routeHubSpotJob(job) {
     case ENTITIES.COMPANY:
       await companySyncService.processCompany(entityId, tenantId);
       break;
-    // Los demás casos se activarán al refactorizar sus servicios
+    case ENTITIES.PRODUCT:
+      await productSyncService.processProduct(entityId, tenantId);
+      break;
+    case ENTITIES.INVOICE:
+      await invoiceSyncService.syncInvoiceToQuickbooks(entityId, tenantId);
+      break;
+    case ENTITIES.HS_PAYMENT:
+      await paymentSyncService.syncPaymentToQuickbooks(entityId, tenantId);
+      break;
     default:
       logger.warn(`[Worker] Entidad HS no soportada o pendiente: ${entity}`);
       await jobService.markSkipped(job._id, 'Entidad no soportada');
   }
 }
 
-/**
- * Enrutador para eventos originados en QuickBooks
- */
 async function routeQuickBooksJob(job) {
   const { entity, entityId, tenantId } = job;
-
   switch (entity) {
     case ENTITIES.CONTACT:
       await contactSyncService.syncCustomerFromQuickbooks(entityId, tenantId);
       break;
     case ENTITIES.COMPANY:
       await companySyncService.syncCompanyFromQuickbooks(entityId, tenantId);
+      break;
+    case ENTITIES.PRODUCT:
+      await productSyncService.syncItemFromQuickbooks(entityId, tenantId);
+      break;
+    case ENTITIES.INVOICE:
+      await invoiceSyncService.syncInvoiceFromQuickbooks(entityId, tenantId);
+      break;
+    case ENTITIES.PAYMENT:
+      await paymentSyncService.syncPaymentFromQuickbooks(entityId, tenantId);
       break;
     default:
       logger.warn(`[Worker] Entidad QB no soportada o pendiente: ${entity}`);
@@ -84,17 +90,39 @@ async function routeQuickBooksJob(job) {
 }
 
 /**
- * Control de flujo y Mutex
+ * 🚀 EL NUEVO MOTOR: Tracción Continua (Pull)
+ * Revisa cuántos "slots" hay libres, busca esa cantidad de jobs y los procesa.
  */
-async function scheduleJob(job) {
-  if (activeJobs >= CONCURRENCY) return; 
+async function processNextJobs() {
+  if (activeJobs >= CONCURRENCY) return;
 
-  activeJobs++;
+  const availableSlots = CONCURRENCY - activeJobs;
+  if (availableSlots <= 0) return;
+
   try {
-    // El Mutex garantiza que si llegan 4 eventos del mismo ID, se procesen uno tras otro
-    await mutex.runSequentially(job.entityId, () => processJob(job));
-  } finally {
-    activeJobs--;
+    // 1. Buscamos N jobs pendientes
+    const jobsToProcess = await SyncJob.find({ status: JOB_STATUS.PENDING })
+      .sort({ createdAt: 1 })
+      .limit(availableSlots);
+
+    for (const job of jobsToProcess) {
+      // 2. Intento atómico de reclamar el job cambiándolo a PROCESSING
+      const claimedJob = await jobService.markProcessing(job._id);
+      if (!claimedJob) continue; // Alguien más lo tomó o fue borrado
+
+      activeJobs++;
+
+      // 3. Ejecutamos de forma asíncrona (Fire & Forget)
+      mutex.runSequentially(claimedJob.entityId, () => processJob(claimedJob))
+        .finally(() => {
+          activeJobs--;
+          // 4. ¡LA MAGIA! Al terminar, el Worker revisa si hay más trabajos en el piso
+          processNextJobs();
+        })
+        .catch(err => logger.error(`Error crítico en Mutex: ${err.message}`));
+    }
+  } catch (error) {
+    logger.error(`Error buscando siguientes jobs: ${error.message}`);
   }
 }
 
@@ -104,15 +132,18 @@ async function scheduleJob(job) {
 function startRetryPoller() {
   setInterval(async () => {
     try {
-      // Buscamos jobs de cualquier tenant que necesiten reintento
       const retryJobs = await SyncJob.find({
         status: JOB_STATUS.RETRY_PENDING,
         nextRetryAt: { $lte: new Date() }
       }).limit(CONCURRENCY);
 
       for (const job of retryJobs) {
-        scheduleJob(job);
+        // Regresamos el job a PENDING para que el motor principal lo recoja
+        await SyncJob.findByIdAndUpdate(job._id, { status: JOB_STATUS.PENDING });
       }
+      
+      // Llamamos al motor para procesar inmediatamente si hay espacio
+      if (retryJobs.length > 0) processNextJobs();
     } catch (err) {
       logger.error(`[Worker] Error en retry poller: ${err.message}`);
     }
@@ -123,22 +154,16 @@ async function startWorker() {
   logger.info(`👷 Worker V2.0 iniciado (Concurrencia: ${CONCURRENCY})`);
 
   try {
-    // 1. Procesar rezagados al arrancar
-    const pending = await SyncJob.find({ status: JOB_STATUS.PENDING }).sort({ createdAt: 1 });
-    for (const job of pending) {
-      scheduleJob(job);
-    }
+    // 1. Encendemos el motor al arrancar para limpiar lo que haya
+    processNextJobs();
 
-    // 2. Escuchar nuevos jobs vía Change Stream
+    // 2. El Change Stream ahora solo "despierta" al motor, no le avienta el Job a la fuerza
     const changeStream = SyncJob.watch([{ $match: { operationType: 'insert' } }]);
-    changeStream.on('change', async (change) => {
-      const job = await SyncJob.findById(change.documentKey._id);
-      if (job && job.status === JOB_STATUS.PENDING) {
-        scheduleJob(job);
-      }
+    changeStream.on('change', () => {
+      processNextJobs();
     });
 
-    // 3. Iniciar recuperador de fallos temporales
+    // 3. Iniciar recuperador
     startRetryPoller();
 
   } catch (err) {
