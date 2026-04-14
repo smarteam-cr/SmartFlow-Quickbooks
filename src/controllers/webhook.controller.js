@@ -1,37 +1,43 @@
+// src/controllers/webhook.controller.js
 const jobService = require('../services/job.service');
 const logger = require('../lib/logger.lib');
-const { AppError } = require('../utils/errors.util');
+const { responseHelper } = require('../lib/response.lib');
+const { DEFAULT_TENANT_ID, SOURCES, ENTITIES } = require('../config/constants');
 
+/**
+ * Mapeo de entidades de QuickBooks a nuestro estándar interno
+ */
+const QB_ENTITY_MAP = {
+  'Payment': ENTITIES.PAYMENT,
+  'Item': ENTITIES.PRODUCT,
+  'Invoice': ENTITIES.INVOICE,
+  'Customer': ENTITIES.CONTACT
+};
+
+/**
+ * Maneja Webhooks de QuickBooks
+ */
 async function handleQuickBooksWebhook(request, reply) {
   const payload = request.body;
-  logger.info('--- Webhook de QB recibido ---');
+  const tenantId = DEFAULT_TENANT_ID; // En el futuro vendrá en el URL query: request.query.tenantId
 
   if (payload.eventNotifications) {
     for (const notification of payload.eventNotifications) {
       for (const entity of notification.dataChangeEvent.entities) {
-
-        // Mapeo de entidades de QB a nuestro estándar interno
-        const entityMapping = {
-          'Payment': 'payment',
-          'Item': 'product',
-          'Invoice': 'invoice',
-          'Customer': 'contact'
-        };
-
-        const internalEntity = entityMapping[entity.name];
-
-        // Filtro de operaciones (Reglas de negocio)
+        const internalEntity = QB_ENTITY_MAP[entity.name];
         const validOps = ['Create', 'Update', 'Emailed'];
 
         if (internalEntity && validOps.includes(entity.operation)) {
-          const job = await jobService.createJob({
-            source: 'QUICKBOOKS',
+          // Encolar con el nuevo formato V2.0
+          await jobService.createJob({
+            tenantId,
+            source: SOURCES.QUICKBOOKS,
             entity: internalEntity,
-            entityId: entity.id,
+            entityId: String(entity.id),
             eventType: `qb.${entity.name.toLowerCase()}.${entity.operation.toLowerCase()}`,
-            payload: entity
+            payload: entity,
+            correlationId: request.correlationId // Trazabilidad inyectada por el middleware
           });
-          logger.info(`✅ Job creado en BD [${job._id}] para QB ${internalEntity} ID: ${entity.id}`);
         }
       }
     }
@@ -40,76 +46,73 @@ async function handleQuickBooksWebhook(request, reply) {
   return reply.status(200).send('OK');
 }
 
+/**
+ * Maneja Webhooks de HubSpot
+ */
 async function handleHubSpotWebhook(request, reply) {
   const events = request.body;
-  logger.info(`Webhook de HubSpot recibido con ${events.length} eventos.`);
+  const tenantId = DEFAULT_TENANT_ID;
+
+  logger.info(`[Webhook/HS] Recibidos ${events.length} eventos.`, { correlationId: request.correlationId });
 
   for (const event of events) {
     const targetId = event.fromObjectId || event.objectId;
+    if (!targetId) continue;
 
-    if (!targetId) {
-      logger.warn(`⚠️ Evento ${event.subscriptionType} ignorado por falta de ID.`, { event });
-      continue;
-    }
+    // Lógica de mapeo de entidades HubSpot
+    let internalEntity = null;
+    const type = event.subscriptionType;
 
-    const entityMap = {
-      'contact.creation': 'contact',
-      'contact.propertyChange': 'contact',
-      'contact.associationChange': 'contact',
-      'company.creation': 'company',
-      'company.propertyChange': 'company',
-      'product.creation': 'product',
-      'product.propertyChange': 'product',
-    };
-
-    let internalEntity = entityMap[event.subscriptionType];
-
-    // Casos Especiales por ObjectTypeId (Facturas, Line Items y Pagos HS)
-    // Casos Especiales por ObjectTypeId (Facturas, Line Items y Pagos HS)
+    if (type.startsWith('contact.')) internalEntity = ENTITIES.CONTACT;
+    else if (type.startsWith('company.')) internalEntity = ENTITIES.COMPANY;
+    else if (type.startsWith('product.')) internalEntity = ENTITIES.PRODUCT;
+    
+    // Casos especiales (Facturas y Line Items)
     if (event.objectTypeId === '0-53') {
-      internalEntity = 'invoice';
-
+      internalEntity = ENTITIES.INVOICE;
+      
       // --- ESCUDO PARA FACTURAS (hs_balance_due) ---
-      if (event.subscriptionType === 'object.propertyChange' && event.propertyName === 'hs_balance_due') {
+      if (type === 'object.propertyChange' && event.propertyName === 'hs_balance_due') {
         const balance = Number(event.propertyValue);
-
         if (isNaN(balance) || balance > 0) {
-          logger.info(`[Webhook/HS] Factura ${targetId} con saldo parcial (${event.propertyValue}). Ignorando, no se crea en QB.`);
-          continue; // 🛑 Se rechaza, no toca la BD, pasa al siguiente evento
+          logger.info(`[Webhook/HS] Factura ${targetId} con saldo parcial (${event.propertyValue}). Ignorando.`);
+          continue; 
         }
-
-        logger.info(`[Webhook/HS] ¡Factura ${targetId} pagada! Saldo es 0. Transformando evento para creación en QB.`);
-
-        // Transformamos el evento internamente para que tu Worker.js re-use la lógica actual de creación
-        event.subscriptionType = 'object.creation';
+        event.subscriptionType = 'object.creation'; // Transformación para disparo en QB
+      } else if (type === 'object.creation') {
+        continue; // Bloqueo de seguridad HS
       }
-      else if (event.subscriptionType === 'object.creation') {
-        // Bloqueo de seguridad: como ya apagaste esto en HS, si llega alguno colgado, lo ignoramos
-        continue;
-      }
-      // Si es object.propertyChange de OTRAS propiedades, seguirá su curso normal...
-
-    } else if (event.objectTypeId === '0-27' || event.subscriptionType.startsWith('line_item')) {
-      internalEntity = 'line_item';
+    } else if (event.objectTypeId === '0-27' || type.startsWith('line_item.')) {
+      internalEntity = ENTITIES.LINE_ITEM;
     } else if (event.objectTypeId === '0-101') {
-      internalEntity = 'hs_payment';
+      internalEntity = ENTITIES.HS_PAYMENT;
     }
 
-    if (internalEntity && targetId) {
-      const job = await jobService.createJob({
-        source: 'HUBSPOT',
-        entity: internalEntity,
-        entityId: targetId.toString(),
-        eventType: event.subscriptionType,
-        payload: event
-      });
-
-      logger.info(`✅ Job creado en BD [${job._id}] para HubSpot ${internalEntity} ID: ${targetId}`);
+    if (internalEntity) {
+      // Encolar con el nuevo formato V2.0 (tenantId requerido)
+      try {
+        const job = await jobService.createJob({
+          tenantId,
+          source: SOURCES.HUBSPOT,
+          entity: internalEntity,
+          entityId: String(targetId),
+          eventType: event.subscriptionType,
+          payload: event,
+          correlationId: request.correlationId
+        });
+        
+        if (job) {
+          logger.info(`✅ Job encolado [${job._id}] para ${internalEntity} ID: ${targetId}`);
+        }
+      } catch (err) {
+        logger.error(`❌ Error encolando job: ${err.message}`, { correlationId: request.correlationId });
+      }
     }
   }
 
-  return reply.code(200).send({ status: 'success' });
+  return reply.code(200).send(responseHelper.success({ processed: events.length }));
 }
+
 module.exports = {
   handleQuickBooksWebhook,
   handleHubSpotWebhook

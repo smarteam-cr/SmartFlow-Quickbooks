@@ -1,66 +1,56 @@
+// src/services/auth.service.js
 const axios = require('axios');
 const config = require('../config');
 const Tenant = require('../db/models/tenant.model');
 const logger = require('../lib/logger.lib');
+const { encrypt, decrypt } = require('../lib/crypto.lib');
 
-// Mutex para evitar renovaciones concurrentes de QuickBooks
-let qbRefreshPromise = null;
+// Map Multitenant para evitar renovaciones concurrentes del mismo cliente
+// Key: tenantId, Value: Promise de renovación
+const qbRefreshPromises = new Map();
 
-/**
- * Obtiene el token de HubSpot directamente de la base de datos.
- * Cumple con el requerimiento V1.0 de leer siempre de DB para evitar desincronización.
- */
 async function getHubSpotToken(tenantId) {
   const tenant = await Tenant.findOne({ tenantId });
-  if (!tenant || !tenant.hubspot?.accessToken) {
-    throw new Error(`HubSpot credentials not found for tenant: ${tenantId}`);
+  if (!tenant || !tenant.hubspot?.accessTokenEncrypted) {
+    throw new Error(`Credenciales de HubSpot no encontradas para el tenant: ${tenantId}`);
   }
-  return tenant.hubspot.accessToken;
+  return decrypt(tenant.hubspot.accessTokenEncrypted);
 }
 
-/**
- * Obtiene el token de QuickBooks directamente de la base de datos.
- */
 async function getQuickBooksToken(tenantId) {
   const tenant = await Tenant.findOne({ tenantId });
-  if (!tenant || !tenant.quickbooks?.accessToken) {
-    throw new Error(`QuickBooks credentials not found for tenant: ${tenantId}`);
+  if (!tenant || !tenant.quickbooks?.accessTokenEncrypted) {
+    throw new Error(`Credenciales de QuickBooks no encontradas para el tenant: ${tenantId}`);
   }
-  return tenant.quickbooks.accessToken;
+  return decrypt(tenant.quickbooks.accessTokenEncrypted);
 }
 
-/**
- * Obtiene la configuración completa de QuickBooks (token y realmId).
- */
 async function getQuickBooksConfig(tenantId) {
   const tenant = await Tenant.findOne({ tenantId });
   if (!tenant || !tenant.quickbooks) {
-    throw new Error(`QuickBooks credentials not found for tenant: ${tenantId}`);
+    throw new Error(`Configuración de QuickBooks no encontrada para el tenant: ${tenantId}`);
   }
   return {
-    accessToken: tenant.quickbooks.accessToken,
+    accessToken: decrypt(tenant.quickbooks.accessTokenEncrypted),
     realmId: tenant.quickbooks.realmId
   };
 }
 
-/**
- * Renueva el token de QuickBooks. 
- * Implementa un bloqueo (Mutex) para asegurar que múltiples peticiones concurrentes
- * solo disparen un ciclo de renovación ante Intuit.
- */
 async function refreshQuickBooksToken(tenantId) {
-  // Si ya hay una renovación en curso para cualquier petición, esperamos a esa misma promesa
-  if (qbRefreshPromise) {
-    logger.info(`[AuthService] Refresh already in progress for ${tenantId}. Waiting...`);
-    return qbRefreshPromise;
+  // Si ya hay una renovación en curso PARA ESTE TENANT, devolvemos la misma promesa
+  if (qbRefreshPromises.has(tenantId)) {
+    logger.info(`[AuthService] Refresh en progreso para ${tenantId}. Esperando...`);
+    return qbRefreshPromises.get(tenantId);
   }
 
-  qbRefreshPromise = (async () => {
+  const promise = (async () => {
     try {
-      logger.info(`[AuthService] Starting QuickBooks token refresh for tenant: ${tenantId}`);
+      logger.info(`[AuthService] Iniciando refresh de token QB para tenant: ${tenantId}`);
 
       const tenant = await Tenant.findOne({ tenantId });
-      if (!tenant || !tenant.quickbooks?.refreshToken) {
+      const currentRefreshToken = decrypt(tenant?.quickbooks?.refreshTokenEncrypted);
+      
+      if (!tenant || !currentRefreshToken) {
         throw new Error('No existe configuración de Tenant o Refresh Token válido.');
       }
 
@@ -72,7 +62,7 @@ async function refreshQuickBooksToken(tenantId) {
         'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
         new URLSearchParams({
           grant_type: 'refresh_token',
-          refresh_token: tenant.quickbooks.refreshToken,
+          refresh_token: currentRefreshToken,
         }).toString(),
         {
           headers: {
@@ -90,26 +80,29 @@ async function refreshQuickBooksToken(tenantId) {
         x_refresh_token_expires_in
       } = response.data;
 
-      // Actualización atómica en base de datos
-      tenant.quickbooks.accessToken = access_token;
-      tenant.quickbooks.refreshToken = refresh_token;
+      // Ciframos los nuevos tokens antes de guardar
+      tenant.quickbooks.accessTokenEncrypted = encrypt(access_token);
+      tenant.quickbooks.refreshTokenEncrypted = encrypt(refresh_token);
       tenant.quickbooks.tokenExpiresAt = new Date(Date.now() + expires_in * 1000);
       tenant.quickbooks.refreshTokenExpiresAt = new Date(Date.now() + x_refresh_token_expires_in * 1000);
 
       await tenant.save();
-      logger.info(`[AuthService] QuickBooks token refreshed successfully for ${tenantId}`);
+      logger.info(`[AuthService] Token de QB refrescado exitosamente para ${tenantId}`);
 
       return access_token;
     } catch (error) {
-      logger.error(`[AuthService] Error refreshing QuickBooks token for ${tenantId}:`, error);
+      logger.error(`[AuthService] Error refrescando token de QB para ${tenantId}:`, error);
       throw error;
     } finally {
       // Liberar el bloqueo al terminar (éxito o error)
-      qbRefreshPromise = null;
+      qbRefreshPromises.delete(tenantId);
     }
   })();
 
-  return qbRefreshPromise;
+  // Guardamos la promesa en el Map
+  qbRefreshPromises.set(tenantId, promise);
+  
+  return promise;
 }
 
 module.exports = {
