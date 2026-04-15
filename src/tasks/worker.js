@@ -147,20 +147,33 @@ function startRetryPoller() {
   }, 30000);
 }
 
+async function recoverOrphanJobs() {
+  const result = await SyncJob.updateMany(
+    { status: JOB_STATUS.PROCESSING },
+    { status: JOB_STATUS.PENDING }
+  );
+  if (result.modifiedCount > 0) {
+    logger.warn(`[Worker] ♻️ ${result.modifiedCount} job(s) huérfano(s) en estado 'processing' recuperados → 'pending'`);
+  }
+}
+
 async function startWorker() {
   logger.info(`👷 Worker V2.0 iniciado (Concurrencia: ${CONCURRENCY})`);
 
   try {
-    // 1. Encendemos el motor al arrancar para limpiar lo que haya
+    // 1. Recuperar jobs huérfanos que quedaron en 'processing' por un crash anterior
+    await recoverOrphanJobs();
+
+    // 2. Encendemos el motor al arrancar para limpiar lo que haya
     processNextJobs();
 
-    // 2. El Change Stream ahora solo "despierta" al motor, no le avienta el Job a la fuerza
+    // 3. El Change Stream ahora solo "despierta" al motor, no le avienta el Job a la fuerza
     const changeStream = SyncJob.watch([{ $match: { operationType: 'insert' } }]);
     changeStream.on('change', () => {
       processNextJobs();
     });
 
-    // 3. Iniciar recuperador
+    // 4. Iniciar recuperador
     startRetryPoller();
 
   } catch (err) {

@@ -432,7 +432,17 @@ async function updateInvoice(invoiceId, propertiesToUpdate) {
     const response = await hsClient.patch(`/crm/v3/objects/invoices/${invoiceId}`, payload);
     return response.data;
   } catch (error) {
-    logger.error(`Error actualizando propiedades en la factura ${invoiceId}:`, error);
+    const hsError = error.response?.data;
+    logger.error(
+      `Error actualizando propiedades en la factura ${invoiceId}: ${error.message}`,
+      {
+        status: error.response?.status,
+        hsMessage: hsError?.message,
+        hsCategory: hsError?.category,
+        hsErrors: hsError?.errors,
+        payload: propertiesToUpdate,
+      }
+    );
     throw error;
   }
 }
@@ -466,6 +476,29 @@ async function updateCompany(companyId, properties) {
     return response.data;
   } catch (error) {
     logger.error(`Error actualizando empresa ${companyId} en HubSpot:`, error);
+    throw error;
+  }
+}
+
+async function searchContactByEmail(email) {
+  try {
+    const payload = {
+      filterGroups: [{
+        filters: [{
+          propertyName: "email",
+          operator: "EQ",
+          value: email,
+        }],
+      }],
+      properties: ["email", "firstname", "lastname", "id_usuario_quickbooks"],
+    };
+    const response = await hsClient.post("/crm/v3/objects/contacts/search", payload);
+    if (response.data.total > 0) {
+      return response.data.results[0];
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error buscando contacto en HubSpot con email ${email}:`, error);
     throw error;
   }
 }
@@ -618,6 +651,7 @@ module.exports = {
   associateInvoiceToDeal,
   updateContact,
   updateCompany,
+  searchContactByEmail,
   searchContactByQbId,
   disassociateContactFromCompany,
   getLineItemAssociations,

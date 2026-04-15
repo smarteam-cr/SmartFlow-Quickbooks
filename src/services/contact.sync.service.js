@@ -138,7 +138,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
         });
       }
     } else {
-      let existingHsContact = hsProps.email ? (await hubspotClient.getAllContacts()).find(c => c.properties.email === hsProps.email) : null;
+      let existingHsContact = hsProps.email ? await hubspotClient.searchContactByEmail(hsProps.email) : null;
       if (existingHsContact) {
         hsContactId = existingHsContact.id;
         await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);

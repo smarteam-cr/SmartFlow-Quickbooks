@@ -123,8 +123,8 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     const updateProps = {
       id_factura_quickbooks: qbInvoiceId.toString(),
       numero_factura_qb: newQbInvoice.DocNumber,
-      sistema_de_origen: 'Quickbooks',
-      estado_de_factura_qb: 'Emitida'
+      sistema_de_origen: 'Quikbooks',
+      estado_de_la_factura: 'Emitida'
     };
 
     await hubspotClient.updateInvoice(invoiceId, updateProps);
@@ -158,7 +158,7 @@ async function handleInvoiceEmailed(qbInvoiceId, tenantId = DEFAULT_TENANT_ID) {
 
   await hubspotClient.updateInvoice(mapping.hsId, {
     factura_enviada_al_cliente: 'Si',
-    estado_de_factura_qb: 'Pagada'
+    estado_de_la_factura: 'Pagada'
   });
 
   logger.info(`✅ Factura HS ${mapping.hsId} marcada como enviada y pagada.`);

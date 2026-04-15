@@ -46,7 +46,7 @@ module.exports = {
     'qb_tax_amount',
     'saldo_pendiente_qb',
     'qb_discount_amount',
-    'estado_de_factura_qb',
+    'estado_de_la_factura',
     'importe_pagado_qb',
   ],
 };
