@@ -10,7 +10,6 @@ const { DEFAULT_TENANT_ID, SOURCES, ENTITIES } = require('../config/constants');
 const QB_ENTITY_MAP = {
   'Payment': ENTITIES.PAYMENT,
   'Item': ENTITIES.PRODUCT,
-  'Invoice': ENTITIES.INVOICE,
   'Customer': ENTITIES.CONTACT
 };
 
@@ -82,8 +81,6 @@ async function handleHubSpotWebhook(request, reply) {
       } else if (type === 'object.creation') {
         continue; // Bloqueo de seguridad HS
       }
-    } else if (event.objectTypeId === '0-27' || type.startsWith('line_item.')) {
-      internalEntity = ENTITIES.LINE_ITEM;
     } else if (event.objectTypeId === '0-101') {
       internalEntity = ENTITIES.HS_PAYMENT;
     }

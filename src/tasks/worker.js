@@ -77,9 +77,6 @@ async function routeQuickBooksJob(job) {
     case ENTITIES.PRODUCT:
       await productSyncService.syncItemFromQuickbooks(entityId, tenantId);
       break;
-    case ENTITIES.INVOICE:
-      await invoiceSyncService.syncInvoiceFromQuickbooks(entityId, tenantId);
-      break;
     case ENTITIES.PAYMENT:
       await paymentSyncService.syncPaymentFromQuickbooks(entityId, tenantId);
       break;
