@@ -133,8 +133,14 @@ async function createCustomer(customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    logger.error("Error creando cliente en QuickBooks:", error);
-    throw error;
+    let qbErrorDetail = error.message;
+    if (error.response && error.response.data && error.response.data.Fault) {
+      const faultError = error.response.data.Fault.Error[0];
+      qbErrorDetail = faultError.Detail || faultError.Message;
+    }
+    
+    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
+    throw new Error(qbErrorDetail);
   }
 }
 
@@ -211,8 +217,14 @@ async function updateItem(itemId, syncToken, itemData) {
     const response = await qbClient.post(`${baseUrl}/item?minorversion=65`, payload);
     return response.data.Item;
   } catch (error) {
-    logger.error(`Error actualizando Item ${itemId}:`, error);
-    throw error;
+    let qbErrorDetail = error.message;
+    if (error.response && error.response.data && error.response.data.Fault) {
+      const faultError = error.response.data.Fault.Error[0];
+      qbErrorDetail = faultError.Detail || faultError.Message;
+    }
+    
+    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
+    throw new Error(qbErrorDetail);
   }
 }
 
@@ -302,8 +314,14 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    logger.error(`Error actualizando cliente ${qbCustomerId}:`, error);
-    throw error;
+    let qbErrorDetail = error.message;
+    if (error.response && error.response.data && error.response.data.Fault) {
+      const faultError = error.response.data.Fault.Error[0];
+      qbErrorDetail = faultError.Detail || faultError.Message;
+    }
+    
+    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
+    throw new Error(qbErrorDetail);
   }
 }
 

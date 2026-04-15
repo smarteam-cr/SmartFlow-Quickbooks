@@ -122,7 +122,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       zip: qbCustomer.BillAddr?.PostalCode || "", country: qbCustomer.BillAddr?.Country || "",
     };
 
-    const newHash = generateHash(hsProps);
+    const newHash = generateHash({ ...hsProps, _parentRef: qbCustomer.ParentRef?.value || null });
     const mapping = await mappingService.findByQbId(tenantId, 'contact', qbCustomerId);
     let hsContactId = mapping ? mapping.hsId : null;
 
@@ -154,12 +154,24 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
     }
 
     if (hsContactId && qbCustomer.ParentRef) {
+      // Sub-customer → Asociar contacto a la empresa padre en HS
       const parentMapping = await mappingService.findByQbId(tenantId, 'company', qbCustomer.ParentRef.value);
       if (parentMapping && parentMapping.hsId) {
         const currentAssocs = await hubspotClient.getContactAssociatedCompanyIds(hsContactId);
         if (!currentAssocs.includes(parentMapping.hsId)) {
           for (const oldId of currentAssocs) await hubspotClient.disassociateContactFromCompany(hsContactId, oldId);
           await hubspotClient.associateContactToCompany(hsContactId, parentMapping.hsId);
+          logger.info(`🔗 Contacto HS ${hsContactId} asociado a Empresa HS ${parentMapping.hsId}`);
+        }
+      }
+    } else if (hsContactId && !qbCustomer.ParentRef) {
+      // Ya NO es sub-customer → Desasociar de cualquier empresa en HS
+      const currentAssocs = await hubspotClient.getContactAssociatedCompanyIds(hsContactId);
+      if (currentAssocs.length > 0) {
+        logger.info(`🔓 Contacto QB ${qbCustomerId} dejó de ser sub-customer. Desasociando de ${currentAssocs.length} empresa(s) en HS...`);
+        for (const companyId of currentAssocs) {
+          await hubspotClient.disassociateContactFromCompany(hsContactId, companyId);
+          logger.info(`  ↳ Desasociado de Empresa HS ${companyId}`);
         }
       }
     }

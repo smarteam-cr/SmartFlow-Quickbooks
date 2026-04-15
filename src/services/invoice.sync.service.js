@@ -10,6 +10,48 @@ const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
 
 /**
+ * Resuelve el QB Item ID para un Line Item de HubSpot.
+ * Estrategia:
+ *   1. Si el line item ya tiene `id_producto_quickbooks` → usar directamente
+ *   2. Si tiene `hs_product_id` → delegar al servicio de productos
+ *   3. Fallback → buscar/crear el item en QB por nombre
+ */
+async function resolveQbItemIdForLineItem(item, tenantId) {
+  const props = item.properties || {};
+
+  // Camino 1: Ya tiene el ID de QB guardado (escenario más común)
+  if (props.id_producto_quickbooks) {
+    return props.id_producto_quickbooks;
+  }
+
+  // Camino 2: Tiene referencia al Producto HS → usamos processProduct
+  if (props.hs_product_id) {
+    const result = await productSyncService.processProduct(props.hs_product_id, tenantId);
+    if (result && result.qbItemId) return result.qbItemId;
+  }
+
+  // Camino 3: Fallback por nombre directo en QB
+  const itemName = props.name || `Product-LI-${item.id}`;
+  logger.info(`🔍 Buscando producto en QB por nombre: "${itemName}"...`);
+  let qbItem = await quickbooksClient.findItemByName(itemName).catch(() => null);
+  if (qbItem) return qbItem.Id;
+
+  // Último recurso: Crear el item en QB
+  logger.info(`✨ Creando producto "${itemName}" en QuickBooks como fallback...`);
+  const Tenant = require('../db/models/tenant.model');
+  const tenant = await Tenant.findOne({ tenantId });
+  const incomeAccountId = tenant?.preferences?.incomeAccountId || '79';
+
+  const newItem = await quickbooksClient.createItem({
+    Name: itemName,
+    Type: 'Service',
+    UnitPrice: props.price ? Number(props.price) : 0,
+    IncomeAccountRef: { value: incomeAccountId }
+  });
+  return newItem.Id;
+}
+
+/**
  * --- HS -> QB (Facturas) ---
  * Se dispara cuando una factura está marcada como pagada en HS.
  */
@@ -56,8 +98,7 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     const qbInvoiceLines = [];
 
     for (const item of lineItemsData) {
-      // Usamos el servicio de productos para garantizar que el producto exista y esté mapeado
-      const { qbItemId } = await productSyncService.processProduct(item.id, tenantId);
+      const qbItemId = await resolveQbItemIdForLineItem(item, tenantId);
       const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
       qbInvoiceLines.push(mappedLine);
     }
@@ -191,7 +232,7 @@ async function syncHubSpotInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENA
   const qbInvoiceLines = [];
 
   for (const item of lineItemsData) {
-    const { qbItemId } = await productSyncService.processProduct(item.id, tenantId);
+    const qbItemId = await resolveQbItemIdForLineItem(item, tenantId);
     qbInvoiceLines.push(qbMapper.mapLineItemToQb(item, qbItemId));
   }
 

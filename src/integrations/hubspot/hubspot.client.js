@@ -393,7 +393,7 @@ async function getLineItemsDetails(lineItemIds) {
       properties: [
         "name", "price", "quantity", "hs_sku", "description", 
         "id_producto_quickbooks", "es_gravable", 
-        "hs_tax_rate_group_id"
+        "hs_tax_rate_group_id", "hs_product_id"
       ]
     };
     const response = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
