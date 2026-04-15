@@ -77,8 +77,8 @@ async function routeQuickBooksJob(job) {
     case ENTITIES.PRODUCT:
       await productSyncService.syncItemFromQuickbooks(entityId, tenantId);
       break;
-    case ENTITIES.PAYMENT:
-      await paymentSyncService.syncPaymentFromQuickbooks(entityId, tenantId);
+    case ENTITIES.INVOICE:
+      await invoiceSyncService.handleInvoiceEmailed(entityId, tenantId);
       break;
     default:
       logger.warn(`[Worker] Entidad QB no soportada o pendiente: ${entity}`);

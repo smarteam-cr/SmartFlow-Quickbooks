@@ -8,7 +8,6 @@ const { DEFAULT_TENANT_ID, SOURCES, ENTITIES } = require('../config/constants');
  * Mapeo de entidades de QuickBooks a nuestro estándar interno
  */
 const QB_ENTITY_MAP = {
-  'Payment': ENTITIES.PAYMENT,
   'Item': ENTITIES.PRODUCT,
   'Customer': ENTITIES.CONTACT
 };
@@ -23,11 +22,24 @@ async function handleQuickBooksWebhook(request, reply) {
   if (payload.eventNotifications) {
     for (const notification of payload.eventNotifications) {
       for (const entity of notification.dataChangeEvent.entities) {
+        // Caso especial: Factura enviada por email en QB
+        if (entity.name === 'Invoice' && entity.operation === 'Emailed') {
+          await jobService.createJob({
+            tenantId,
+            source: SOURCES.QUICKBOOKS,
+            entity: ENTITIES.INVOICE,
+            entityId: String(entity.id),
+            eventType: 'qb.invoice.emailed',
+            payload: entity,
+            correlationId: request.correlationId
+          });
+          continue;
+        }
+
         const internalEntity = QB_ENTITY_MAP[entity.name];
         const validOps = ['Create', 'Update', 'Emailed'];
 
         if (internalEntity && validOps.includes(entity.operation)) {
-          // Encolar con el nuevo formato V2.0
           await jobService.createJob({
             tenantId,
             source: SOURCES.QUICKBOOKS,
@@ -35,7 +47,7 @@ async function handleQuickBooksWebhook(request, reply) {
             entityId: String(entity.id),
             eventType: `qb.${entity.name.toLowerCase()}.${entity.operation.toLowerCase()}`,
             payload: entity,
-            correlationId: request.correlationId // Trazabilidad inyectada por el middleware
+            correlationId: request.correlationId
           });
         }
       }

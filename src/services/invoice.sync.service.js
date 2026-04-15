@@ -123,7 +123,8 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     const updateProps = {
       id_factura_quickbooks: qbInvoiceId.toString(),
       numero_factura_qb: newQbInvoice.DocNumber,
-      sistema_de_origen: 'Quickbooks'
+      sistema_de_origen: 'Quickbooks',
+      estado_de_factura_qb: 'Emitida'
     };
 
     await hubspotClient.updateInvoice(invoiceId, updateProps);
@@ -141,6 +142,29 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
   }
 }
 
+/**
+ * --- QB -> HS (Factura enviada al cliente) ---
+ * Se dispara cuando QB notifica que la factura fue enviada por email.
+ * En ese momento los créditos del customer ya saldaron la factura en QB.
+ */
+async function handleInvoiceEmailed(qbInvoiceId, tenantId = DEFAULT_TENANT_ID) {
+  logger.info(`[Sync] Factura QB ${qbInvoiceId} enviada al cliente -> actualizando HS`, { source: 'QUICKBOOKS', entity: 'invoice', entityId: qbInvoiceId, tenantId });
+
+  const mapping = await mappingService.findByQbId(tenantId, 'invoice', qbInvoiceId);
+  if (!mapping || !mapping.hsId) {
+    logger.warn(`⚠️ Factura QB ${qbInvoiceId} sin mapeo en HS. Omitiendo.`);
+    return;
+  }
+
+  await hubspotClient.updateInvoice(mapping.hsId, {
+    factura_enviada_al_cliente: 'Si',
+    estado_de_factura_qb: 'Pagada'
+  });
+
+  logger.info(`✅ Factura HS ${mapping.hsId} marcada como enviada y pagada.`);
+}
+
 module.exports = {
-  syncInvoiceToQuickbooks
+  syncInvoiceToQuickbooks,
+  handleInvoiceEmailed
 };
