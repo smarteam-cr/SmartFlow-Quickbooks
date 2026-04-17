@@ -39,7 +39,7 @@ async function webhookRoutes(fastify, options) {
   }, webhookController.handleQuickBooksWebhook);
 
   // HubSpot Estándar: Validamos firma y esquema
-  fastify.post('/hubspot2', {
+  fastify.post('/hubspot-pruebas', {
     schema: hubspotWebhookSchema,
     preHandler: authMiddleware.validateHubSpotSignature
   }, webhookController.handleHubSpotWebhook);

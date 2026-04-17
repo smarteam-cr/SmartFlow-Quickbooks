@@ -44,7 +44,8 @@ const validateHubSpotSignature = (request, reply, done) => {
 };
 
 const validateIntuitSignature = (request, reply, done) => {
-  // 🚧 [Security] Validación de firma QB omitida temporalmente (Modo Dev).
+  // 🚧 |[Security] Validación de firma QB omitida temporalmente (Modo Dev).
+
   if (process.env.NODE_ENV !== 'production') {
     logger.info('🚧 [Security] Validación de firma QB omitida temporalmente (Modo Dev).');
     return done();

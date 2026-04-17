@@ -149,7 +149,7 @@ function startRetryPoller() {
 
 async function recoverOrphanJobs() {
   const result = await SyncJob.updateMany(
-    { status: JOB_STATUS.PROCESSING },
+    { status: JOB_STATUS.PROCESSING }, 
     { status: JOB_STATUS.PENDING }
   );
   if (result.modifiedCount > 0) {

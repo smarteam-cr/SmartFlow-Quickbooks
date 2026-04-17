@@ -9,7 +9,7 @@ const PORT = config.port;
 const start = async () => {
   try {
     await connectDB();
-    await startWorker();
+   await startWorker();
     await app.listen({ port: PORT });
     logger.info(`🚀 Servidor corriendo en http://localhost:${PORT}`);
   } catch (err) {

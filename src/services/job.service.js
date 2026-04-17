@@ -29,7 +29,7 @@ async function createJob(jobData) {
     payload,
     correlationId: correlationId || uuidv4(),
     dedupeKey,
-    status: JOB_STATUS.PENDING,
+    status: JOB_STATUS.PENDING, //TODO: cambiar a JOB_STATUS.PENDING
     maxAttempts: config.worker.maxRetryAttempts,
   });
 

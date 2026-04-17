@@ -34,68 +34,80 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
     logger.info(`♻️ [Echo Check] Ignorando evento de Contacto HS ID ${hsContactId} (generado internamente).`);
     return null;
   }
-  
+
   logger.info(`[Sync] Procesando Contacto HS ID: ${hsContactId}`, { source: 'HUBSPOT', entity: 'contact', entityId: hsContactId, tenantId });
 
-  const hsContact = await hubspotClient.getContactDetails(hsContactId);
+  let hsContact;
+  try {
+    hsContact = await hubspotClient.getContactDetails(hsContactId);
+  } catch (error) {
+    logger.error(`❌ Error al obtener detalles del Contacto HS ID ${hsContactId}: ${error.message}`, { hsContactId, error: error.message });
+    return null;
+  }
   if (!hsContact || !hsContact.properties?.email) return null;
 
-  let qbParentId = null;
-  const associatedCompanyIds = await hubspotClient.getContactAssociatedCompanyIds(hsContactId);
-  if (associatedCompanyIds.length > 0) {
-    const mapping = await mappingService.findByHsId(tenantId, 'company', associatedCompanyIds[0]);
-    if (mapping && mapping.qbId) qbParentId = mapping.qbId;
-  }
-
-  const normalizedData = normalizeHsContactToQb(hsContact, qbParentId);
-  const newHash = generateHash(normalizedData);
-  const mapping = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
-  let qbCustomerId = null;
-
-  if (mapping && mapping.qbId) {
-    qbCustomerId = mapping.qbId;
-    if (mapping.payloadHash === newHash) {
-      logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`);
-      return { qbCustomerId };
+  try {
+    let qbParentId = null;
+    const associatedCompanyIds = await hubspotClient.getContactAssociatedCompanyIds(hsContactId);
+    if (associatedCompanyIds.length > 0) {
+      const companyMapping = await mappingService.findByHsId(tenantId, 'company', associatedCompanyIds[0]);
+      if (companyMapping && companyMapping.qbId) qbParentId = companyMapping.qbId;
     }
 
-    logger.info(`📝 Cambios detectados. Actualizando cliente en QB...`);
-    
-    // 🛡️ FIX (Error 400): Traer el SyncToken más reciente justo antes de actualizar
-    const currentQbData = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
-    if (!currentQbData) {
-      logger.warn(`⚠️ Cliente QB ${qbCustomerId} no encontrado (Borrado). No se puede actualizar.`);
-      return { qbCustomerId };
-    }
+    const normalizedData = normalizeHsContactToQb(hsContact, qbParentId);
+    const newHash = generateHash(normalizedData);
+    const mapping = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
+    let qbCustomerId = null;
 
-    echoSuppression.markAsCreatedInQb(qbCustomerId);
-    const updated = await quickbooksClient.updateCustomer(qbCustomerId, currentQbData.SyncToken, normalizedData);
-    
-    await mappingService.upsertMapping({
-      tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
-      qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+    if (mapping && mapping.qbId) {
+      qbCustomerId = mapping.qbId;
+      if (mapping.payloadHash === newHash) {
+        logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`);
+        return { qbCustomerId };
+      }
+
+      logger.info(`📝 Cambios detectados. Actualizando cliente en QB...`);
+
+      const currentQbData = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+      if (!currentQbData) {
+        logger.warn(`⚠️ Cliente QB ${qbCustomerId} no encontrado (Borrado). No se puede actualizar.`);
+        return { qbCustomerId };
+      }
+
+      echoSuppression.markAsCreatedInQb(qbCustomerId);
+      const updated = await quickbooksClient.updateCustomer(qbCustomerId, currentQbData.SyncToken, normalizedData);
+
+      await mappingService.upsertMapping({
+        tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
+        qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+      });
+    } else {
+      let existingQbCustomer = await quickbooksClient.findCustomerByEmail(normalizedData.email);
+      if (!existingQbCustomer) {
+        existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
+        if (existingQbCustomer) normalizedData.displayName = `${normalizedData.displayName} (${normalizedData.email})`;
+      }
+
+      if (!existingQbCustomer) {
+        existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
+        echoSuppression.markAsCreatedInQb(existingQbCustomer.Id);
+      }
+      qbCustomerId = existingQbCustomer.Id;
+
+      await mappingService.upsertMapping({
+        tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
+        qbSyncToken: existingQbCustomer.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+      });
+      echoSuppression.markAsCreatedInHs(hsContactId);
+      await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
+    }
+    return { qbCustomerId };
+  } catch (error) {
+    logger.error(`❌ Error en processContact para HS ID ${hsContactId}: ${error.message}`, {
+      hsContactId, tenantId, error: error.message, stack: error.stack
     });
-  } else {
-    let existingQbCustomer = await quickbooksClient.findCustomerByEmail(normalizedData.email);
-    if (!existingQbCustomer) {
-      existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
-      if (existingQbCustomer) normalizedData.displayName = `${normalizedData.displayName} (${normalizedData.email})`;
-    }
-
-    if (!existingQbCustomer) {
-      existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
-      echoSuppression.markAsCreatedInQb(existingQbCustomer.Id);
-    }
-    qbCustomerId = existingQbCustomer.Id;
-
-    await mappingService.upsertMapping({
-      tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
-      qbSyncToken: existingQbCustomer.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
-    });
-    echoSuppression.markAsCreatedInHs(hsContactId);
-    await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
+    throw error;
   }
-  return { qbCustomerId };
 }
 
 /**
