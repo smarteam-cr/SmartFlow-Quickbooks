@@ -36,7 +36,7 @@ async function createJob(jobData) {
   // 4. Registrar la huella para los próximos 5 minutos
   await dedupeService.markAsSeen(tenantId, dedupeKey, job._id);
   
-  return job;
+  return job; 
 }
 
 async function markProcessing(jobId) {

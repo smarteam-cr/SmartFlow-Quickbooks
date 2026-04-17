@@ -150,7 +150,7 @@ function startRetryPoller() {
 async function recoverOrphanJobs() {
   const result = await SyncJob.updateMany(
     { status: JOB_STATUS.PROCESSING }, 
-    { status: JOB_STATUS.PENDING }
+    { status: JOB_STATUS.COMPLETED }
   );
   if (result.modifiedCount > 0) {
     logger.warn(`[Worker] ♻️ ${result.modifiedCount} job(s) huérfano(s) en estado 'processing' recuperados → 'pending'`);
