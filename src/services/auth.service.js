@@ -105,9 +105,133 @@ async function refreshQuickBooksToken(tenantId) {
   return promise;
 }
 
+/**
+ * Intercambia el authorization code de Intuit por tokens (access + refresh).
+ * Se llama una sola vez después de que el usuario autoriza en la pantalla de Intuit.
+ * 
+ * @param {string} code - Código temporal que Intuit envía al callback
+ * @param {string} realmId - ID de la empresa de QuickBooks que el usuario seleccionó
+ * @param {string} tenantId - ID del tenant en nuestro sistema
+ */
+async function exchangeCodeForTokens(code, realmId, tenantId) {
+  logger.info('[AuthService] Intercambiando code por tokens', { tenantId, realmId });
+
+  // 1. Buscar el tenant en MongoDB (ya debe existir)
+  const tenant = await Tenant.findOne({ tenantId });
+  if (!tenant) {
+    throw new Error(`Tenant no encontrado: ${tenantId}`);
+  }
+
+  // 2. Construir el header de autenticación Basic (client_id:client_secret en base64)
+  //    Es el mismo mecanismo que usa refreshQuickBooksToken
+  const authHeader = Buffer.from(
+    `${config.quickbooks.clientId}:${config.quickbooks.clientSecret}`
+  ).toString('base64');
+
+  // 3. POST a Intuit para intercambiar el code por tokens
+  const response = await axios.post(
+    'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
+    new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: config.quickbooks.redirectUri,
+    }).toString(),
+    {
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${authHeader}`,
+      },
+    }
+  );
+
+  const {
+    access_token,
+    refresh_token,
+    expires_in,
+    x_refresh_token_expires_in,
+  } = response.data;
+
+  // 4. Cifrar tokens y guardar en el tenant
+  tenant.quickbooks.realmId = realmId;
+  tenant.quickbooks.accessTokenEncrypted = encrypt(access_token);
+  tenant.quickbooks.refreshTokenEncrypted = encrypt(refresh_token);
+  tenant.quickbooks.tokenExpiresAt = new Date(Date.now() + expires_in * 1000);
+  tenant.quickbooks.refreshTokenExpiresAt = new Date(Date.now() + x_refresh_token_expires_in * 1000);
+
+  await tenant.save();
+
+  logger.info('[AuthService] Tokens de QB guardados exitosamente', { tenantId, realmId });
+
+  return {
+    tenantId,
+    realmId,
+    tokenExpiresAt: tenant.quickbooks.tokenExpiresAt,
+    refreshTokenExpiresAt: tenant.quickbooks.refreshTokenExpiresAt,
+  };
+}
+
+/**
+ * Consulta el estado de la conexión OAuth de QuickBooks para un tenant.
+ * No descifra tokens — solo verifica si existen y cuándo expiran.
+ */
+async function getConnectionStatus(tenantId) {
+  const tenant = await Tenant.findOne({ tenantId });
+
+  if (!tenant) {
+    return { connected: false, reason: 'Tenant no encontrado' };
+  }
+
+  const hasTokens = !!tenant.quickbooks?.accessTokenEncrypted && !!tenant.quickbooks?.refreshTokenEncrypted;
+
+  if (!hasTokens) {
+    return { connected: false, reason: 'Sin tokens de QuickBooks' };
+  }
+
+  const now = new Date();
+  const tokenExpired = tenant.quickbooks.tokenExpiresAt && tenant.quickbooks.tokenExpiresAt < now;
+  const refreshExpired = tenant.quickbooks.refreshTokenExpiresAt && tenant.quickbooks.refreshTokenExpiresAt < now;
+
+  return {
+    connected: !refreshExpired,
+    realmId: tenant.quickbooks.realmId,
+    environment: tenant.quickbooks.environment,
+    accessTokenExpired: !!tokenExpired,
+    accessTokenExpiresAt: tenant.quickbooks.tokenExpiresAt,
+    refreshTokenExpired: !!refreshExpired,
+    refreshTokenExpiresAt: tenant.quickbooks.refreshTokenExpiresAt,
+  };
+}
+
+/**
+ * Desconecta QuickBooks de un tenant.
+ * Borra tokens cifrados, realmId y fechas de expiración.
+ * El tenant sigue existiendo — solo pierde la conexión con QB.
+ */
+async function disconnectQuickBooks(tenantId) {
+  const tenant = await Tenant.findOne({ tenantId });
+
+  if (!tenant) {
+    throw new Error(`Tenant no encontrado: ${tenantId}`);
+  }
+
+  tenant.quickbooks.accessTokenEncrypted = undefined;
+  tenant.quickbooks.refreshTokenEncrypted = undefined;
+  tenant.quickbooks.realmId = undefined;
+  tenant.quickbooks.tokenExpiresAt = undefined;
+  tenant.quickbooks.refreshTokenExpiresAt = undefined;
+
+  await tenant.save();
+
+  logger.info('[AuthService] QuickBooks desconectado', { tenantId });
+}
+
 module.exports = {
   getHubSpotToken,
   getQuickBooksToken,
   getQuickBooksConfig,
   refreshQuickBooksToken,
+  exchangeCodeForTokens,
+  getConnectionStatus,
+  disconnectQuickBooks,
 };

@@ -1,4 +1,3 @@
-// src/app.js
 const fastify = require("fastify")({ 
   logger: false, 
   trustProxy: true 
@@ -11,6 +10,7 @@ const loggerSource = require("./lib/logger.lib");
 
 const webhookRoutes = require("./routes/webhook.routes");
 const migrationRoutes = require("./routes/migration.routes.js");
+const authRoutes = require("./routes/auth.routes");
 const { correlationMiddleware } = require("./middlewares/correlation.middleware");
 
 // Fastify por defecto destruye el texto original al parsear JSON.
@@ -73,6 +73,7 @@ fastify.get("/", async (request, reply) => {
 });
 
 fastify.register(webhookRoutes, { prefix: "/webhook" });
+fastify.register(authRoutes, { prefix: "/auth" });
 fastify.register(migrationRoutes);
 
 module.exports = fastify;
