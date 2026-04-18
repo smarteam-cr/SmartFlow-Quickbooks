@@ -5,28 +5,37 @@ const mapLineItemToQb = (hsItem, qbItemId) => {
   const price = Number(hsItem.properties.price || 0);
   const qty = Number(hsItem.properties.quantity || 1);
   
-  // Condición estricta: es_gravable activado o tiene una tasa asignada nativamente
+  // HubSpot 'amount' ya incluye el descuento por línea aplicado.
+  // Si no viene (compatibilidad), fallback a price × qty.
+  const lineAmount = hsItem.properties.amount 
+    ? Number(hsItem.properties.amount) 
+    : price * qty;
+
+  // QB valida que Amount = UnitPrice × Qty internamente.
+  // Calculamos un precio unitario efectivo para que los números cuadren.
+  const effectiveUnitPrice = qty > 0 ? lineAmount / qty : price;
+
   const isTaxable = hsItem.properties.es_gravable === "true" || !!hsItem.properties.hs_tax_rate_group_id;
 
   return {
-    Amount: price * qty,
+    Amount: lineAmount,
     Description: hsItem.properties.description || hsItem.properties.name,
     DetailType: "SalesItemLineDetail",
     SalesItemLineDetail: {
       ItemRef: { value: qbItemId.toString() },
-      UnitPrice: price,
+      UnitPrice: effectiveUnitPrice,
       Qty: qty,
       TaxCodeRef: { value: isTaxable ? "TAX" : "NON" }
     },
   };
 };
 
-const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo) => {
+const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs = 0) => {
   const payload = {
     CustomerRef: { value: qbCustomerId.toString() },
     Line: [],
-    TxnDate: formatToQbDate(hsInvoice.properties.hs_invoice_date),
-    DueDate: formatToQbDate(hsInvoice.properties.hs_due_date),
+    TxnDate: formatToQbDate(hsInvoice.properties.hs_invoice_date, utcOffsetMs),
+    DueDate: formatToQbDate(hsInvoice.properties.hs_due_date, utcOffsetMs),
     CustomerMemo: {
       value: hsInvoice.properties.hs_title || `Factura exportada desde HubSpot`
     }
@@ -38,30 +47,16 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo)
     payload.BillAddr = { Line1: displayName, Line2: addressParts.join(', ') };
   }
 
-  let totalDiscountAmount = Number(hsInvoice.properties.hs_discounts_total || 0);
   let hasTaxableItem = false;
 
   for (const line of qbInvoiceLines) {
-    // 1. Evaluar si la factura general necesita el TxnTaxDetail global
     if (line.SalesItemLineDetail.TaxCodeRef.value === "TAX") {
       hasTaxableItem = true;
     }
-
     payload.Line.push(line);
   }
 
-  // 3. Inyectar línea de Descuento Absoluto Global
-  if (totalDiscountAmount > 0) {
-    payload.Line.push({
-      Amount: totalDiscountAmount,
-      DetailType: "DiscountLineDetail",
-      DiscountLineDetail: { PercentBased: false }
-    });
-    // Determina que el impuesto se calcula sobre el subtotal restante
-    payload.ApplyTaxAfterDiscount = true; 
-  }
-
-  // 4. Inyectar Regla Global de Impuestos
+  // Inyectar Regla Global de Impuestos
   if (hasTaxableItem) {
     payload.TxnTaxDetail = {
       TxnTaxCodeRef: { value: config.quickbooks.defaultTaxCodeId.toString() }

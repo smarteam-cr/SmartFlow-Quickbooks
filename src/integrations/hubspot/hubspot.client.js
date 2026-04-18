@@ -347,7 +347,9 @@ async function getInvoiceDetails(invoiceId) {
       "saldo_pendiente_qb",
       "qb_discount_amount",
       "fecha_estimada_pago",
-      "hs_discounts_total"
+      "hs_discounts_total",
+      "hs_taxes_total",
+      "hs_amount_billed"
     ].join(",");
     
     const response = await hsClient.get(`/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`);
@@ -393,7 +395,8 @@ async function getLineItemsDetails(lineItemIds) {
       properties: [
         "name", "price", "quantity", "hs_sku", "description", 
         "id_producto_quickbooks", "es_gravable", 
-        "hs_tax_rate_group_id", "hs_product_id"
+        "hs_tax_rate_group_id", "hs_product_id",
+        "amount", "discount", "hs_pre_discount_amount"
       ]
     };
     const response = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
@@ -658,4 +661,3 @@ module.exports = {
   getPaymentDetails,
   getPaymentAssociations,
 };
-

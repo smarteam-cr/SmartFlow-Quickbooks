@@ -103,7 +103,11 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     }
 
     // 5. Mapeo y Creación en QB
-    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo);
+    const Tenant = require('../db/models/tenant.model');
+    const tenant = await Tenant.findOne({ tenantId });
+    const utcOffsetMs = tenant?.hubspot?.utcOffsetMilliseconds || 0;
+
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs);
     
     logger.info(`📝 Creando factura en QuickBooks...`);
     const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);

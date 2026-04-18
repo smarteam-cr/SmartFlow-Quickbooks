@@ -8,7 +8,9 @@ const tenantSchema = new mongoose.Schema({
   
   hubspot: {
     portalId: { type: String },
-    accessTokenEncrypted: { type: String } 
+    accessTokenEncrypted: { type: String },
+    utcOffset: { type: String },              // Ej: "-06:00" — referencia legible
+    utcOffsetMilliseconds: { type: Number },  // Ej: -21600000 — para cálculos de fecha
   },
   
   quickbooks: {

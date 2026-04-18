@@ -348,7 +348,7 @@ async function createPayment(paymentPayload) {
     const response = await qbClient.post(`${baseUrl}/payment?minorversion=75`, paymentPayload);
     return response.data.Payment;
   } catch (error) {
-    logger.error('Error creando Pago en QuickBooks:', error);
+    logger.error('Error creando Pago en QuickBooks:', error.message);
     throw error;
   }
 }
