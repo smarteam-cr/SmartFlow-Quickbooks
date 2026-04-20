@@ -22,11 +22,12 @@ const tenantSchema = new mongoose.Schema({
     environment: { type: String, enum: ['sandbox', 'production'], default: 'sandbox' }
   },
   
-  // Preferencias operativas descubiertas vía OAuth o configuradas en onboarding
+  // Preferencias operativas descubiertas automáticamente vía QB API durante OAuth
   preferences: {
-    incomeAccountId: { type: String },
-    defaultTaxCodeId: { type: String },
-    // Mapa flexible para cruzar IDs de impuestos de HS hacia QB. Ej: { "hs_tax_19": "qb_code_3" }
+    incomeAccountId: { type: String },       // ID de la cuenta de ingresos en QB
+    defaultTaxCodeId: { type: String },      // ID del TaxCode en QB (el del dropdown)
+    defaultTaxRateId: { type: String },      // ID del TaxRate dentro de ese TaxCode
+    defaultTaxRatePercent: { type: Number }, // Porcentaje (ej: 13)
     taxMappings: { type: Map, of: String }
   }
 }, { timestamps: true });

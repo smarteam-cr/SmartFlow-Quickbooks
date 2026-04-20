@@ -348,7 +348,7 @@ async function createPayment(paymentPayload) {
     const response = await qbClient.post(`${baseUrl}/payment?minorversion=75`, paymentPayload);
     return response.data.Payment;
   } catch (error) {
-    logger.error('Error creando Pago en QuickBooks:', error.message);
+    logger.error('Error creando Pago en QuickBooks:', error);
     throw error;
   }
 }
@@ -406,6 +406,54 @@ async function linkPaymentToInvoice(paymentId, syncToken, qbInvoiceId, amount, c
   }
 }
 
+/**
+ * Obtiene todas las tasas de impuesto (TaxRate) del QuickBooks del cliente.
+ * Cada TaxRate tiene: Id, Name, RateValue (el porcentaje, ej: 13).
+ */
+async function getTaxRates() {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const query = 'SELECT * FROM TaxRate';
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    return response.data.QueryResponse.TaxRate || [];
+  } catch (error) {
+    logger.error('Error obteniendo TaxRates de QuickBooks:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene todos los códigos de impuesto (TaxCode) del QuickBooks del cliente.
+ * Cada TaxCode tiene: Id, Name, y referencia a los TaxRates que lo componen.
+ */
+async function getTaxCodes() {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const query = 'SELECT * FROM TaxCode';
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    return response.data.QueryResponse.TaxCode || [];
+  } catch (error) {
+    logger.error('Error obteniendo TaxCodes de QuickBooks:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene todas las cuentas de ingreso (Account tipo Income) del QuickBooks del cliente.
+ * Útil para descubrir automáticamente el incomeAccountId durante onboarding.
+ */
+async function getIncomeAccounts() {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const query = "SELECT * FROM Account WHERE AccountType = 'Income'";
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    return response.data.QueryResponse.Account || [];
+  } catch (error) {
+    logger.error('Error obteniendo cuentas de ingreso de QuickBooks:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -424,5 +472,8 @@ module.exports = {
   updateInvoice,
   createPayment,
   findPaymentByRefNumber,
-  linkPaymentToInvoice
+  linkPaymentToInvoice,
+  getTaxRates,
+  getTaxCodes,
+  getIncomeAccounts,
 };

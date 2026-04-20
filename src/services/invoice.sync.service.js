@@ -127,7 +127,7 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     const updateProps = {
       id_factura_quickbooks: qbInvoiceId.toString(),
       numero_factura_qb: newQbInvoice.DocNumber,
-      sistema_de_origen: 'Quikbooks',
+      sistema_de_origen: 'Quickbooks',
       estado_de_la_factura: 'Emitida'
     };
 

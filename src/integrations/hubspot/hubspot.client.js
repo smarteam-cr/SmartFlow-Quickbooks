@@ -660,4 +660,5 @@ module.exports = {
   getLineItemAssociations,
   getPaymentDetails,
   getPaymentAssociations,
+  _getHsClient: () => hsClient,
 };
