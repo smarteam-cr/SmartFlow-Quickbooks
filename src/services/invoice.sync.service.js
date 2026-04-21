@@ -37,19 +37,8 @@ async function resolveQbItemIdForLineItem(item, tenantId) {
   let qbItem = await quickbooksClient.findItemByName(itemName).catch(() => null);
   if (qbItem) return qbItem.Id;
 
-  // Último recurso: Crear el item en QB
-  logger.info(`✨ Creando producto "${itemName}" en QuickBooks como fallback...`);
-  const Tenant = require('../db/models/tenant.model');
-  const tenant = await Tenant.findOne({ tenantId });
-  const incomeAccountId = tenant?.preferences?.incomeAccountId || '79';
-
-  const newItem = await quickbooksClient.createItem({
-    Name: itemName,
-    Type: 'Service',
-    UnitPrice: props.price ? Number(props.price) : 0,
-    IncomeAccountRef: { value: incomeAccountId }
-  });
-  return newItem.Id;
+  // El producto no existe en QB — debe crearse manualmente desde QuickBooks antes de sincronizar esta factura
+  throw new Error(`Producto "${itemName}" no encontrado en QuickBooks. Créalo en QB y vuelve a intentarlo.`);
 }
 
 /**

@@ -24,7 +24,6 @@ const tenantSchema = new mongoose.Schema({
   
   // Preferencias operativas descubiertas automáticamente vía QB API durante OAuth
   preferences: {
-    incomeAccountId: { type: String },       // ID de la cuenta de ingresos en QB
     defaultTaxCodeId: { type: String },      // ID del TaxCode en QB (el del dropdown)
     defaultTaxRateId: { type: String },      // ID del TaxRate dentro de ese TaxCode
     defaultTaxRatePercent: { type: Number }, // Porcentaje (ej: 13)

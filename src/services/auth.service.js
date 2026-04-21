@@ -193,16 +193,7 @@ async function discoverQbPreferences(tenantId) {
 
   logger.info('[AuthService] Descubriendo preferencias de QB...', { tenantId });
 
-  // 1. Descubrir cuenta de ingresos
-  const incomeAccounts = await qbClient.getIncomeAccounts();
-  if (incomeAccounts.length > 0) {
-    // Usar la primera cuenta de tipo Income (usualmente "Sales" o "Services")
-    const account = incomeAccounts[0];
-    tenant.preferences.incomeAccountId = account.Id;
-    logger.info(`[AuthService] Income Account descubierta: "${account.Name}" (ID: ${account.Id})`);
-  }
-
-  // 2. Descubrir TaxRates y TaxCodes
+  // Descubrir TaxRates y TaxCodes
   const taxRates = await qbClient.getTaxRates();
   const taxCodes = await qbClient.getTaxCodes();
 

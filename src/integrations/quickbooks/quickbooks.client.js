@@ -432,23 +432,6 @@ async function getTaxCodes() {
   }
 }
 
-/**
- * Obtiene todas las cuentas de ingreso (Account tipo Income) del QuickBooks del cliente.
- * Útil para descubrir automáticamente el incomeAccountId durante onboarding.
- */
-async function getIncomeAccounts() {
-  try {
-    const baseUrl = await getBaseResourceUrl();
-    const query = "SELECT * FROM Account WHERE AccountType = 'Income'";
-    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
-    return response.data.QueryResponse.Account || [];
-  } catch (error) {
-    const detail = extractAxiosError(error);
-    logger.error(`Error obteniendo cuentas de ingreso de QuickBooks: ${detail}`);
-    throw new Error(detail);
-  }
-}
-
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -470,5 +453,4 @@ module.exports = {
   linkPaymentToInvoice,
   getTaxRates,
   getTaxCodes,
-  getIncomeAccounts,
 };
