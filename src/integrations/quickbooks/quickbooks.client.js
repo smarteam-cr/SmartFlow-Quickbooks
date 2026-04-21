@@ -3,6 +3,7 @@ const axios = require("axios");
 const authService = require("../../services/auth.service");
 const logger = require("../../lib/logger.lib");
 const { DEFAULT_TENANT_ID } = require("../../config/constants");
+const { extractAxiosError } = require("../../utils/axios.error.util");
 
 /**
  * Instancia centralizada de Axios para QuickBooks.
@@ -45,7 +46,7 @@ qbClient.interceptors.response.use(
         originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`;
         return qbClient(originalRequest);
       } catch (refreshError) {
-        logger.error('[QuickBooksClient] Falló el ciclo de autorrefresco:', refreshError);
+        logger.error(`[QuickBooksClient] Falló el ciclo de autorrefresco: ${extractAxiosError(refreshError)}`);
         return Promise.reject(refreshError);
       }
     }
@@ -67,8 +68,9 @@ async function getPaymentDetails(paymentId) {
     const response = await qbClient.get(`${baseUrl}/payment/${paymentId}?minorversion=65`);
     return response.data.Payment;
   } catch (error) {
-    logger.error(`Error obteniendo detalles del pago ${paymentId}:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo detalles del pago ${paymentId}: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -80,8 +82,9 @@ async function findCustomerByEmail(email) {
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
   } catch (error) {
-    logger.error("Error buscando cliente en QuickBooks por email:", error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando cliente en QuickBooks por email: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -123,6 +126,7 @@ async function createCustomer(customerData) {
       payload.ParentRef = { value: customerData.parentRef };
       payload.Job = true;
     }
+    if (customerData.suffix) payload.Suffix = customerData.suffix.substring(0, 16);
     if (customerData.nit) payload.AlternatePhone = { FreeFormNumber: customerData.nit };
     if (customerData.domain) {
       let uri = customerData.domain;
@@ -133,14 +137,9 @@ async function createCustomer(customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    let qbErrorDetail = error.message;
-    if (error.response && error.response.data && error.response.data.Fault) {
-      const faultError = error.response.data.Fault.Error[0];
-      qbErrorDetail = faultError.Detail || faultError.Message;
-    }
-    
-    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
-    throw new Error(qbErrorDetail);
+    const detail = extractAxiosError(error);
+    logger.error(`Error de validación creando cliente en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -152,8 +151,9 @@ async function findCustomerByDisplayName(displayName) {
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
   } catch (error) {
-    logger.error("Error buscando cliente por DisplayName:", error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando cliente por DisplayName: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -164,8 +164,9 @@ async function getAllCustomers() {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.Customer || [];
   } catch (error) {
-    logger.error("Error obteniendo clientes de QuickBooks:", error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo clientes de QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -173,13 +174,14 @@ async function findItemByName(itemName) {
   try {
     const baseUrl = await getBaseResourceUrl();
     const safeName = itemName.replace(/'/g, "\\'");
-    const query = `SELECT * FROM Item WHERE Name = '${safeName}'`;
+    const query = `SELECT * FROM Item WHERE Name = '${safeName}' AND Active = true`;
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     const itemInfo = response.data.QueryResponse.Item;
     return (itemInfo && itemInfo.length > 0) ? itemInfo[0] : null;
   } catch (error) {
-    logger.error("Error buscando Item por nombre:", error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando Item por nombre: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -189,8 +191,9 @@ async function createItem(itemData) {
     const response = await qbClient.post(`${baseUrl}/item?minorversion=65`, itemData);
     return response.data.Item;
   } catch (error) {
-    logger.error("Error creando Item en QuickBooks:", error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error creando Item en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -200,8 +203,9 @@ async function getItemById(itemId) {
     const response = await qbClient.get(`${baseUrl}/item/${itemId}?minorversion=65`);
     return response.data.Item;
   } catch (error) {
-    logger.error(`Error obteniendo Item ${itemId} en QuickBooks:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo Item ${itemId} en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -217,14 +221,9 @@ async function updateItem(itemId, syncToken, itemData) {
     const response = await qbClient.post(`${baseUrl}/item?minorversion=65`, payload);
     return response.data.Item;
   } catch (error) {
-    let qbErrorDetail = error.message;
-    if (error.response && error.response.data && error.response.data.Fault) {
-      const faultError = error.response.data.Fault.Error[0];
-      qbErrorDetail = faultError.Detail || faultError.Message;
-    }
-    
-    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
-    throw new Error(qbErrorDetail);
+    const detail = extractAxiosError(error);
+    logger.error(`Error de validación actualizando Item ${itemId} en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -234,8 +233,9 @@ async function createInvoice(invoicePayload) {
     const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, invoicePayload);
     return response.data.Invoice;
   } catch (error) {
-    logger.error('Error creando Factura en QuickBooks:', error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error creando Factura en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -245,8 +245,9 @@ async function getInvoice(invoiceId) {
     const response = await qbClient.get(`${baseUrl}/invoice/${invoiceId}?minorversion=65`);
     return response.data.Invoice;
   } catch (error) {
-    logger.error(`Error obteniendo la Factura ${invoiceId}:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo la Factura ${invoiceId}: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -256,8 +257,9 @@ async function getCustomerById(customerId) {
     const response = await qbClient.get(`${baseUrl}/customer/${customerId}?minorversion=65`);
     return response.data.Customer;
   } catch (error) {
-    logger.error(`Error obteniendo Customer ${customerId}:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo Customer ${customerId}: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -304,6 +306,7 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     } else if (customerData.parentRef === null) {
       payload.Job = false;
     }
+    if (customerData.suffix) payload.Suffix = customerData.suffix.substring(0, 16);
     if (customerData.nit) payload.AlternatePhone = { FreeFormNumber: String(customerData.nit) };
     if (customerData.domain) {
       let uri = customerData.domain;
@@ -314,14 +317,9 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
   } catch (error) {
-    let qbErrorDetail = error.message;
-    if (error.response && error.response.data && error.response.data.Fault) {
-      const faultError = error.response.data.Fault.Error[0];
-      qbErrorDetail = faultError.Detail || faultError.Message;
-    }
-    
-    logger.error(`Error de validación creando cliente en QuickBooks: ${qbErrorDetail}`);
-    throw new Error(qbErrorDetail);
+    const detail = extractAxiosError(error);
+    logger.error(`Error de validación actualizando cliente ${qbCustomerId} en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -337,8 +335,9 @@ async function updateInvoice(qbInvoiceId, syncToken, invoicePayload) {
     const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, payload);
     return response.data.Invoice;
   } catch (error) {
-    logger.error(`Error actualizando factura ${qbInvoiceId}:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error actualizando factura ${qbInvoiceId}: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -348,8 +347,9 @@ async function createPayment(paymentPayload) {
     const response = await qbClient.post(`${baseUrl}/payment?minorversion=75`, paymentPayload);
     return response.data.Payment;
   } catch (error) {
-    logger.error('Error creando Pago en QuickBooks:', error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error creando Pago en QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -361,8 +361,9 @@ async function findPaymentByRefNumber(refNumber) {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.Payment || [];
   } catch (error) {
-    logger.error(`Error buscando Pago por referencia ${refNumber}:`, error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando Pago por referencia ${refNumber}: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -387,22 +388,13 @@ async function linkPaymentToInvoice(paymentId, syncToken, qbInvoiceId, amount, c
         }
       ]
     };
-    
+
     const response = await qbClient.post(`${baseUrl}/payment?minorversion=65`, payload);
     return response.data.Payment;
   } catch (error) {
-    // --- EXTRACCIÓN PRECISA DEL ERROR DE QUICKBOOKS ---
-    let qbErrorDetail = error.message;
-    if (error.response && error.response.data && error.response.data.Fault) {
-      // Extraemos el detalle exacto de la validación de negocio de Intuit
-      const faultError = error.response.data.Fault.Error[0];
-      qbErrorDetail = faultError.Detail || faultError.Message;
-    }
-    
-    logger.error(`Error de validación enlazando Pago ${paymentId} a Factura ${qbInvoiceId}. Detalle QB: ${qbErrorDetail}`);
-    
-    // Lanzamos el mensaje limpio como un Error nativo de Node, no el objeto Axios completo
-    throw new Error(qbErrorDetail);
+    const detail = extractAxiosError(error);
+    logger.error(`Error de validación enlazando Pago ${paymentId} a Factura ${qbInvoiceId}. Detalle QB: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -417,8 +409,9 @@ async function getTaxRates() {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.TaxRate || [];
   } catch (error) {
-    logger.error('Error obteniendo TaxRates de QuickBooks:', error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo TaxRates de QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -433,8 +426,9 @@ async function getTaxCodes() {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.TaxCode || [];
   } catch (error) {
-    logger.error('Error obteniendo TaxCodes de QuickBooks:', error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo TaxCodes de QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 
@@ -449,8 +443,9 @@ async function getIncomeAccounts() {
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     return response.data.QueryResponse.Account || [];
   } catch (error) {
-    logger.error('Error obteniendo cuentas de ingreso de QuickBooks:', error);
-    throw error;
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo cuentas de ingreso de QuickBooks: ${detail}`);
+    throw new Error(detail);
   }
 }
 

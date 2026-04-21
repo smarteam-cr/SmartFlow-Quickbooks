@@ -91,10 +91,20 @@ async function processProduct(hsProductId, tenantId = DEFAULT_TENANT_ID) {
 
     logger.info(`📝 Actualizando producto en QuickBooks...`);
     
-    // 🛡️ FIX: Traer SyncToken Fresco
     const currentQbData = await quickbooksClient.getItemById(qbItemId).catch(() => null);
-    if (!currentQbData) {
-      logger.warn(`⚠️ Producto QB ${qbItemId} no encontrado. No se puede actualizar.`);
+    if (!currentQbData || currentQbData.Active === false) {
+      logger.warn(`⚠️ Producto QB ${qbItemId} no encontrado o inactivo. Creando uno nuevo...`);
+      const newItem = await quickbooksClient.createItem(normalizedData);
+      echoSuppression.markAsCreatedInQb(newItem.Id);
+      qbItemId = newItem.Id;
+      await mappingService.upsertMapping({
+        tenantId, entityType: 'product', hsId: hsProductId, qbId: qbItemId,
+        qbSyncToken: newItem.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
+      });
+      echoSuppression.markAsCreatedInHs(hsProductId);
+      await hubspotClient.updateProduct(hsProductId, { id_producto_quickbooks: qbItemId }).catch(err => {
+        logger.warn(`No se pudo actualizar el ID de QB en HubSpot para el producto ${hsProductId}: ${err.message}`);
+      });
       return { qbItemId };
     }
 

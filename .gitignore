@@ -147,3 +147,6 @@ skills-lock.json
 
 # Scripts
 src/scripts/
+
+# Migrations
+migration-reports/

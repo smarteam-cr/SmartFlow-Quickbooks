@@ -16,6 +16,7 @@ const QB_ENTITY_MAP = {
  * Maneja Webhooks de QuickBooks
  */
 async function handleQuickBooksWebhook(request, reply) {
+  // return reply.status(200).send('OK');
   console.log("--------------------------------------------QUICKBOOKS--------------------------------------------")
   const payload = request.body;
   const tenantId = DEFAULT_TENANT_ID;

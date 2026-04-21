@@ -24,7 +24,7 @@ hsClient.interceptors.request.use(async (reqConfig) => {
 
 async function getContactDetails(contactId) {
   try {
-    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks";
+    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks,documento_de_identidad";
     const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}?properties=${properties}`);
     return response.data;
   } catch (error) {
@@ -506,6 +506,29 @@ async function searchContactByEmail(email) {
   }
 }
 
+async function searchContactByIdentification(idNumber) {
+  try {
+    const payload = {
+      filterGroups: [{
+        filters: [{
+          propertyName: "documento_de_identidad",
+          operator: "EQ",
+          value: idNumber.toString(),
+        }],
+      }],
+      properties: ["firstname", "lastname", "documento_de_identidad", "id_usuario_quickbooks"],
+    };
+    const response = await hsClient.post("/crm/v3/objects/contacts/search", payload);
+    if (response.data.total > 0) {
+      return response.data.results[0];
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error buscando contacto en HubSpot con documento_de_identidad ${idNumber}:`, error);
+    throw error;
+  }
+}
+
 async function searchContactByQbId(qbId) {
   try {
     const payload = {
@@ -655,6 +678,7 @@ module.exports = {
   updateContact,
   updateCompany,
   searchContactByEmail,
+  searchContactByIdentification,
   searchContactByQbId,
   disassociateContactFromCompany,
   getLineItemAssociations,

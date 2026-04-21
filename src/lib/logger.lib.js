@@ -8,11 +8,53 @@ const path = require('path');
  * V2.0 Ready: New transports can be added easily in the transports array.
  */
 
+/**
+ * Replacer seguro para JSON.stringify: extrae los campos útiles de errores
+ * de Axios (response.data con formato QB Fault o HS message) y colapsa
+ * referencias circulares. Evita que `JSON.stringify` falle con
+ * `[objeto no serializable]`.
+ */
+function safeReplacer() {
+  const seen = new WeakSet();
+  return function replacer(key, value) {
+    if (value && typeof value === 'object') {
+      // Colapsa Axios errors a una forma serializable útil
+      if (value.isAxiosError || (value.response && value.response.status && value.config)) {
+        const data = value.response && value.response.data;
+        let detail = value.message;
+        if (data) {
+          if (data.Fault && Array.isArray(data.Fault.Error) && data.Fault.Error[0]) {
+            const f = data.Fault.Error[0];
+            detail = `${f.Detail || f.Message || detail}${f.code ? ` (code=${f.code})` : ''}`;
+          } else if (typeof data.message === 'string') {
+            detail = data.message;
+          } else if (typeof data === 'string') {
+            detail = data;
+          }
+        }
+        return {
+          axiosError: true,
+          status: value.response && value.response.status,
+          url: value.config && value.config.url,
+          method: value.config && value.config.method,
+          detail
+        };
+      }
+      if (value instanceof Error) {
+        return { name: value.name, message: value.message, stack: value.stack };
+      }
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+    }
+    return value;
+  };
+}
+
 // Custom log format for files (JSON)
 const logFormat = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   winston.format.errors({ stack: true }), // Capture stack trace
-  winston.format.json()
+  winston.format.json({ replacer: safeReplacer() })
 );
 
 // Custom log format for Console (Readable + Colors)
@@ -23,7 +65,7 @@ const consoleFormat = winston.format.combine(
     let msg = `${timestamp} ${level}: ${message}`;
     if (Object.keys(meta).length > 0) {
       try {
-        msg += ` ${JSON.stringify(meta)}`;
+        msg += ` ${JSON.stringify(meta, safeReplacer())}`;
       } catch (_) {
         msg += ` [objeto no serializable]`;
       }

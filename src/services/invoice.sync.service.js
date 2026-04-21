@@ -18,9 +18,11 @@ const { DEFAULT_TENANT_ID } = require('../config/constants');
 async function resolveQbItemIdForLineItem(item, tenantId) {
   const props = item.properties || {};
 
-  // Camino 1: Ya tiene el ID de QB guardado (escenario más común)
+  // Camino 1: Ya tiene el ID de QB guardado — validar que el item siga activo
   if (props.id_producto_quickbooks) {
-    return props.id_producto_quickbooks;
+    const qbItem = await quickbooksClient.getItemById(props.id_producto_quickbooks).catch(() => null);
+    if (qbItem && qbItem.Active !== false) return props.id_producto_quickbooks;
+    logger.warn(`⚠️ Item QB ${props.id_producto_quickbooks} inactivo o eliminado. Re-resolviendo...`);
   }
 
   // Camino 2: Tiene referencia al Producto HS → usamos processProduct
@@ -88,8 +90,9 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     }
 
     const contactId = contactAssociations[0];
-    const { qbCustomerId, contactInfo } = await contactSyncService.processContact(contactId, tenantId);
-    if (!qbCustomerId) throw new Error(`No se pudo resolver el Customer Ref para ${contactId}`);
+    const contactResult = await contactSyncService.processContact(contactId, tenantId);
+    if (!contactResult?.qbCustomerId) throw new Error(`No se pudo resolver el Customer Ref para ${contactId}`);
+    const { qbCustomerId, contactInfo } = contactResult;
 
     // 4. Resolución de PRODUCTOS (Line Items)
     logger.info(`📦 Procesando ${lineItemAssociations.length} Line Items...`);

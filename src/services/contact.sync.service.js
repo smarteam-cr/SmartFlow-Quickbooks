@@ -9,13 +9,13 @@ const { DEFAULT_TENANT_ID } = require('../config/constants');
 
 function normalizeHsContactToQb(hsContact, qbParentId) {
   const props = hsContact.properties || {};
-  const email = props.email || "";
+  const suffix = (props.documento_de_identidad || "").substring(0, 16);
   let displayName = `${props.firstname || ""} ${props.lastname || ""}`.trim();
-  if (!displayName) displayName = email;
+  if (suffix) displayName = displayName ? `${displayName} ${suffix}` : suffix;
 
   return {
-    email, firstName: props.firstname || "", lastName: props.lastname || "",
-    phone: props.phone || "", mobile: props.hs_whatsapp_phone_number || "",
+    email: props.email || "", firstName: props.firstname || "", lastName: props.lastname || "",
+    suffix, phone: props.phone || "", mobile: props.hs_whatsapp_phone_number || "",
     address: props.address || "", city: props.city || "",
     state: props.state || "", zip: props.zip || "",
     country: props.country || "", parentRef: qbParentId, displayName
@@ -26,12 +26,38 @@ function generateHash(payload) {
   return crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex');
 }
 
+const _contactLocks = new Map();
+
 /**
  * --- HS -> QB ---
+ * Wrapper con mutex por contactId para evitar race conditions cuando dos jobs
+ * concurrentes procesan el mismo contacto que aún no existe en QB.
  */
 async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
+  const lockKey = `${tenantId}:${hsContactId}`;
+
+  if (_contactLocks.has(lockKey)) {
+    logger.info(`⏳ [Lock] Esperando proceso en curso para Contacto HS ${hsContactId}...`);
+    await _contactLocks.get(lockKey).catch(() => {});
+    const existing = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
+    if (existing?.qbId) return { qbCustomerId: existing.qbId };
+    return null;
+  }
+
+  const execution = _doProcessContact(hsContactId, tenantId);
+  _contactLocks.set(lockKey, execution);
+  try {
+    return await execution;
+  } finally {
+    _contactLocks.delete(lockKey);
+  }
+}
+
+async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
   if (echoSuppression.wasCreatedInHs(hsContactId)) {
     logger.info(`♻️ [Echo Check] Ignorando evento de Contacto HS ID ${hsContactId} (generado internamente).`);
+    const existingMapping = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
+    if (existingMapping?.qbId) return { qbCustomerId: existingMapping.qbId };
     return null;
   }
 
@@ -44,7 +70,7 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
     logger.error(`❌ Error al obtener detalles del Contacto HS ID ${hsContactId}: ${error.message}`, { hsContactId, error: error.message });
     return null;
   }
-  if (!hsContact || !hsContact.properties?.email) return null;
+  if (!hsContact || !hsContact.properties?.documento_de_identidad) return null;
 
   try {
     let qbParentId = null;
@@ -63,7 +89,7 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       qbCustomerId = mapping.qbId;
       if (mapping.payloadHash === newHash) {
         logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`);
-        return { qbCustomerId };
+        return { qbCustomerId, contactInfo: normalizedData };
       }
 
       logger.info(`📝 Cambios detectados. Actualizando cliente en QB...`);
@@ -82,11 +108,7 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
         qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
       });
     } else {
-      let existingQbCustomer = await quickbooksClient.findCustomerByEmail(normalizedData.email);
-      if (!existingQbCustomer) {
-        existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
-        if (existingQbCustomer) normalizedData.displayName = `${normalizedData.displayName} (${normalizedData.email})`;
-      }
+      let existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
 
       if (!existingQbCustomer) {
         existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
@@ -101,7 +123,7 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       echoSuppression.markAsCreatedInHs(hsContactId);
       await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
     }
-    return { qbCustomerId };
+    return { qbCustomerId, contactInfo: normalizedData };
   } catch (error) {
     logger.error(`❌ Error en processContact para HS ID ${hsContactId}: ${error.message}`, {
       hsContactId, tenantId, error: error.message, stack: error.stack
@@ -132,6 +154,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       hs_whatsapp_phone_number: qbCustomer.Mobile?.FreeFormNumber || "", address: qbCustomer.BillAddr?.Line1 || "",
       city: qbCustomer.BillAddr?.City || "", state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
       zip: qbCustomer.BillAddr?.PostalCode || "", country: qbCustomer.BillAddr?.Country || "",
+      documento_de_identidad: qbCustomer.Suffix || "",
     };
 
     const newHash = generateHash({ ...hsProps, _parentRef: qbCustomer.ParentRef?.value || null });
@@ -150,15 +173,22 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
         });
       }
     } else {
-      let existingHsContact = hsProps.email ? await hubspotClient.searchContactByEmail(hsProps.email) : null;
+      const idNumber = qbCustomer.Suffix || "";
+      if (!idNumber) {
+        logger.warn(`⚠️ Customer QB ${qbCustomerId} sin Suffix (documento_de_identidad). Omitiendo sync a HS.`);
+        return;
+      }
+      let existingHsContact = await hubspotClient.searchContactByIdentification(idNumber);
       if (existingHsContact) {
         hsContactId = existingHsContact.id;
+        echoSuppression.markAsCreatedInHs(hsContactId);
         await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
+        await hubspotClient.updateContact(hsContactId, hsProps);
       } else {
         const newContact = await hubspotClient.createSingleContact(hsProps, qbCustomerId);
         hsContactId = newContact.id;
+        echoSuppression.markAsCreatedInHs(hsContactId);
       }
-      echoSuppression.markAsCreatedInHs(hsContactId);
       await mappingService.upsertMapping({
         tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
         qbSyncToken: qbCustomer.SyncToken, payloadHash: newHash, sourceSystem: 'QUICKBOOKS'
