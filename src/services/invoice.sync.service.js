@@ -5,40 +5,86 @@ const contactSyncService = require('./contact.sync.service');
 const productSyncService = require('./product.sync.service');
 const mappingService = require('./mapping.service');
 const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
+const Tenant = require('../db/models/tenant.model');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
 
 /**
- * Resuelve el QB Item ID para un Line Item de HubSpot.
- * Estrategia:
+ * Resuelve el QB Item ID y su SalesTaxCodeRef para un Line Item de HubSpot.
+ * Retorna { qbItemId, qbSalesTaxCodeId }.
+ * Estrategia para qbItemId:
  *   1. Si el line item ya tiene `id_producto_quickbooks` → usar directamente
  *   2. Si tiene `hs_product_id` → delegar al servicio de productos
- *   3. Fallback → buscar/crear el item en QB por nombre
+ *   3. Fallback → buscar el item en QB por nombre
+ * Siempre se termina con un `getItemById` para extraer SalesTaxCodeRef,
+ * que se usa luego para la validación estricta de tax.
  */
 async function resolveQbItemIdForLineItem(item, tenantId) {
   const props = item.properties || {};
+  let qbItemId = null;
 
   // Camino 1: Ya tiene el ID de QB guardado — validar que el item siga activo
   if (props.id_producto_quickbooks) {
-    const qbItem = await quickbooksClient.getItemById(props.id_producto_quickbooks).catch(() => null);
-    if (qbItem && qbItem.Active !== false) return props.id_producto_quickbooks;
-    logger.warn(`⚠️ Item QB ${props.id_producto_quickbooks} inactivo o eliminado. Re-resolviendo...`);
+    const existing = await quickbooksClient.getItemById(props.id_producto_quickbooks).catch(() => null);
+    if (existing && existing.Active !== false) {
+      qbItemId = props.id_producto_quickbooks;
+    } else {
+      logger.warn(`⚠️ Item QB ${props.id_producto_quickbooks} inactivo o eliminado. Re-resolviendo...`);
+    }
   }
 
   // Camino 2: Tiene referencia al Producto HS → usamos processProduct
-  if (props.hs_product_id) {
+  if (!qbItemId && props.hs_product_id) {
     const result = await productSyncService.processProduct(props.hs_product_id, tenantId);
-    if (result && result.qbItemId) return result.qbItemId;
+    if (result && result.qbItemId) qbItemId = result.qbItemId;
   }
 
   // Camino 3: Fallback por nombre directo en QB
-  const itemName = props.name || `Product-LI-${item.id}`;
-  logger.info(`🔍 Buscando producto en QB por nombre: "${itemName}"...`);
-  let qbItem = await quickbooksClient.findItemByName(itemName).catch(() => null);
-  if (qbItem) return qbItem.Id;
+  if (!qbItemId) {
+    const itemName = props.name || `Product-LI-${item.id}`;
+    logger.info(`🔍 Buscando producto en QB por nombre: "${itemName}"...`);
+    const byName = await quickbooksClient.findItemByName(itemName).catch(() => null);
+    if (byName) qbItemId = byName.Id;
+  }
 
-  // El producto no existe en QB — debe crearse manualmente desde QuickBooks antes de sincronizar esta factura
-  throw new Error(`Producto "${itemName}" no encontrado en QuickBooks. Créalo en QB y vuelve a intentarlo.`);
+  if (!qbItemId) {
+    const itemName = props.name || `Product-LI-${item.id}`;
+    throw new Error(`Producto "${itemName}" no encontrado en QuickBooks. Créalo en QB y vuelve a intentarlo.`);
+  }
+
+  // Obtener SalesTaxCodeRef del item para validación de tax
+  const qbItem = await quickbooksClient.getItemById(qbItemId);
+  const qbSalesTaxCodeId = qbItem?.SalesTaxCodeRef?.value;
+  if (!qbSalesTaxCodeId) {
+    throw new Error(`QB Item ${qbItemId} no tiene SalesTaxCodeRef configurado. Configura el tax del producto en QuickBooks.`);
+  }
+
+  return { qbItemId, qbSalesTaxCodeId };
+}
+
+/**
+ * Valida que el tax seleccionado en la línea de HS coincida con el tax
+ * del item en QB, usando taxMappings del tenant como tabla de traducción.
+ * Lanza Error con detalle si hay discrepancia — aborta la creación de la factura.
+ */
+function validateLineTax(item, qbItemId, qbSalesTaxCodeId, taxMappings) {
+  const hsTaxId = item.properties?.hs_tax_rate_group_id;
+
+  if (!hsTaxId) {
+    throw new Error(`Line item ${item.id} sin hs_tax_rate_group_id. El usuario debe seleccionar una tasa en HS.`);
+  }
+
+  const expectedHsTaxId = Object.keys(taxMappings).find(k => taxMappings[k] === qbSalesTaxCodeId);
+  if (!expectedHsTaxId) {
+    throw new Error(`QB item ${qbItemId} usa TaxCode ${qbSalesTaxCodeId} que no está en taxMappings del tenant. Ejecuta configure-tax-mappings.js para registrarlo.`);
+  }
+
+  if (hsTaxId !== expectedHsTaxId) {
+    const hsMappedTo = taxMappings[hsTaxId] || '(sin mapeo)';
+    throw new Error(
+      `Tax mismatch en line item ${item.id}: HS envía "${hsTaxId}" (→ QB ${hsMappedTo}), pero QB item ${qbItemId} tiene TaxCode ${qbSalesTaxCodeId} (← HS esperado "${expectedHsTaxId}").`
+    );
+  }
 }
 
 /**
@@ -83,21 +129,34 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     if (!contactResult?.qbCustomerId) throw new Error(`No se pudo resolver el Customer Ref para ${contactId}`);
     const { qbCustomerId, contactInfo } = contactResult;
 
-    // 4. Resolución de PRODUCTOS (Line Items)
+    // 4. Cargar tenant (para utcOffset + taxMappings)
+    const tenant = await Tenant.findOne({ tenantId });
+    if (!tenant) throw new Error(`Tenant ${tenantId} no encontrado.`);
+
+    const taxMappings = {};
+    const rawTaxMappings = tenant.preferences?.taxMappings;
+    if (rawTaxMappings instanceof Map) {
+      for (const [k, v] of rawTaxMappings.entries()) taxMappings[k] = v;
+    } else if (rawTaxMappings && typeof rawTaxMappings === 'object') {
+      Object.assign(taxMappings, rawTaxMappings);
+    }
+    if (Object.keys(taxMappings).length === 0) {
+      throw new Error(`Tenant ${tenantId} sin taxMappings configurados. Ejecuta configure-tax-mappings.js antes de sincronizar facturas.`);
+    }
+
+    const utcOffsetMs = tenant?.hubspot?.utcOffsetMilliseconds || 0;
+
+    // 5. Resolución de PRODUCTOS + validación estricta de tax por línea
     logger.info(`📦 Procesando ${lineItemAssociations.length} Line Items...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
     const qbInvoiceLines = [];
 
     for (const item of lineItemsData) {
-      const qbItemId = await resolveQbItemIdForLineItem(item, tenantId);
-      const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId);
+      const { qbItemId, qbSalesTaxCodeId } = await resolveQbItemIdForLineItem(item, tenantId);
+      validateLineTax(item, qbItemId, qbSalesTaxCodeId, taxMappings);
+      const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId, qbSalesTaxCodeId);
       qbInvoiceLines.push(mappedLine);
     }
-
-    // 5. Mapeo y Creación en QB
-    const Tenant = require('../db/models/tenant.model');
-    const tenant = await Tenant.findOne({ tenantId });
-    const utcOffsetMs = tenant?.hubspot?.utcOffsetMilliseconds || 0;
 
     const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs);
     

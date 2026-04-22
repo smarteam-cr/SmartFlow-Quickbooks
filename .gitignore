@@ -150,3 +150,6 @@ src/scripts/
 
 # Migrations
 migration-reports/
+
+# Tax mappings
+tax-mappings.json

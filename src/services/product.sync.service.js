@@ -19,6 +19,13 @@ function buildHsControlledFields(hsProduct) {
   };
 }
 
+// QB Type → HS hs_product_type. Group/Bundle no tienen equivalente en HS → "".
+const QB_TYPE_TO_HS_PRODUCT_TYPE = {
+  Service: 'service',
+  NonInventory: 'non_inventory',
+  Inventory: 'inventory',
+};
+
 /**
  * Normalización QB -> HS (Items a Productos)
  * Incluye la transformación del Booleano de QB a string para HS
@@ -30,6 +37,7 @@ function normalizeQbItemToHs(qbItem) {
     price: qbItem.UnitPrice ? String(qbItem.UnitPrice) : "0",
     hs_sku: qbItem.Sku || "",
     es_gravable: qbItem.Taxable ? "true" : "false",
+    hs_product_type: QB_TYPE_TO_HS_PRODUCT_TYPE[qbItem.Type] || "",
     id_producto_quickbooks: qbItem.Id.toString()
   };
 }
