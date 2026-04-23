@@ -32,7 +32,7 @@ module.exports = {
   MAPPED_HS_PROPS: {
     contact: ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'hs_whatsapp_phone_number'],
     company: ['name', 'nit', 'phone', 'domain', 'address', 'city', 'state', 'zip', 'country'],
-    product: ['name', 'price', 'hs_price_usd', 'description', 'hs_sku', 'es_gravable'],
+    product: ['name', 'hs_price_usd', 'description', 'hs_sku', 'hs_product_type', 'cuenta_de_ingresos', 'impuesto_sobre_las_ventas'],
   },
   
   // Propiedades generadas internamente en HS (ignoradas en webhooks para suprimir ecos)

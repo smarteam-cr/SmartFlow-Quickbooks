@@ -56,9 +56,22 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 - `searchContactByEmail` (HS client) only returns `email`, `firstname`, `lastname`, `id_usuario_quickbooks` — it does **not** return `documento_de_identidad`. Use `getContactDetails` if that field is needed.
 
 **Products** (`product.sync.service.js`):
-- `processProduct(hsProductId)` resolves the QB Item ID for an HS product
-- If mapping exists but QB item is inactive (`Active === false`), creates a new item and updates the mapping
-- `findItemByName` always filters `AND Active = true` — soft-deleted QB items are invisible to the search and will be recreated
+- **Bidirectional create + update.** Products can originate in either platform.
+- **Field mapping** (QB ↔ HS):
+  - `Name` ↔ `name`
+  - `Description` ↔ `description`
+  - `UnitPrice` ↔ `hs_price_usd` (NOT `price` — `price` in HS is a required placeholder, normally 1)
+  - `Sku` ↔ `hs_sku`
+  - `Type` ↔ `hs_product_type` (`Service` ↔ `service`, `NonInventory` ↔ `non_inventory`, `Inventory` ↔ `inventory`)
+  - `IncomeAccountRef.value` ↔ `cuenta_de_ingresos` (HS dropdown internal values = QB IncomeAccount IDs)
+  - `SalesTaxCodeRef.value` ↔ `impuesto_sobre_las_ventas` (HS dropdown internal values = QB TaxCode IDs)
+  - `Id` → `id_producto_quickbooks` (QB→HS only)
+- **HS→QB create (CASO B)**: requires `name`, `hs_price_usd`, `cuenta_de_ingresos`, `hs_product_type`. If missing, logs warning and skips. If name already exists in QB, links to that item instead of creating a duplicate.
+- **Inventory rule**: `hs_product_type=inventory` is rejected on HS→QB (both create and update) with a warning — Inventory items must be created and managed directly in QB because they require stock tracking fields that HS doesn't have. Service ↔ NonInventory transitions from HS are allowed.
+- **QB→HS filter**: items with `Type` in `{Category, Group, Bundle}` are skipped — no equivalent in HS.
+- **HS→QB update backward-compat**: if HS product doesn't have `cuenta_de_ingresos` / `impuesto_sobre_las_ventas` set (legacy products), those fields are preserved from QB rather than overwritten with empty.
+- **Inactive QB items**: if mapping exists but QB item is `Active === false`, HS→QB skips the update (item must be recreated in QB manually). `findItemByName` filters `AND Active = true` — soft-deleted QB items are invisible.
+- **Echo suppression**: `processProduct` marks `qbItemId` after create/update and `hsProductId` before writing `id_producto_quickbooks` back to HS.
 
 **Invoices** (`invoice.sync.service.js`):
 - HS → QB: only fires when `hs_balance_due = 0` (the webhook controller ignores partial-balance events)
@@ -72,7 +85,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 ### Multi-Tenancy
 
-The system is designed for multiple tenants but currently runs with `DEFAULT_TENANT_ID`. Tenant credentials (HubSpot token, QB tokens, preferences like `incomeAccountId`, `utcOffsetMilliseconds`) are stored in `tenant.model.js` and retrieved dynamically. QB tokens are refreshed automatically on 401 via the Axios interceptor in `quickbooks.client.js`.
+The system is designed for multiple tenants but currently runs with `DEFAULT_TENANT_ID`. Tenant credentials (HubSpot token, QB tokens, `utcOffsetMilliseconds`, `preferences.taxMappings`) are stored in `tenant.model.js` and retrieved dynamically. QB tokens are refreshed automatically on 401 via the Axios interceptor in `quickbooks.client.js`. `preferences.taxMappings` is populated via `src/scripts/configure-tax-mappings.js` and is required by the invoice sync flow.
 
 ### Error Handling
 

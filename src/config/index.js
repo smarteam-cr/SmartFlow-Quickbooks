@@ -42,7 +42,6 @@ clientId: process.env.QB_CLIENT_ID,
     clientSecret: process.env.QB_CLIENT_SECRET,
     redirectUri: process.env.QB_REDIRECT_URI,
     verifierToken: process.env.QB_WEBHOOK_VERIFIER_TOKEN,
-    defaultTaxCodeId: process.env.QB_DEFAULT_TAX_CODE_ID,
   },
   
   mongo: {

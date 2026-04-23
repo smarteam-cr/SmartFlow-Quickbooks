@@ -163,72 +163,12 @@ async function exchangeCodeForTokens(code, realmId, tenantId) {
 
   logger.info('[AuthService] Tokens de QB guardados exitosamente', { tenantId, realmId });
 
-  // 5. Auto-descubrir preferencias del QB del cliente (tax codes, income account)
-  try {
-    await discoverQbPreferences(tenantId);
-  } catch (err) {
-    // No fallar el OAuth si el descubrimiento falla — se puede hacer manualmente después
-    logger.warn('[AuthService] No se pudieron descubrir preferencias de QB automáticamente', { error: err.message });
-  }
-
   return {
     tenantId,
     realmId,
     tokenExpiresAt: tenant.quickbooks.tokenExpiresAt,
     refreshTokenExpiresAt: tenant.quickbooks.refreshTokenExpiresAt,
   };
-}
-
-/**
- * Consulta la API de QB para descubrir automáticamente:
- * - La cuenta de ingresos (Income Account) → incomeAccountId
- * - El código de impuesto y su tasa → defaultTaxCodeId, defaultTaxRateId, defaultTaxRatePercent
- * 
- * Se ejecuta una vez después del OAuth. Los valores se guardan en tenant.preferences.
- */
-async function discoverQbPreferences(tenantId) {
-  const qbClient = require('../integrations/quickbooks/quickbooks.client');
-  const tenant = await Tenant.findOne({ tenantId });
-  if (!tenant) throw new Error(`Tenant no encontrado: ${tenantId}`);
-
-  logger.info('[AuthService] Descubriendo preferencias de QB...', { tenantId });
-
-  // Descubrir TaxRates y TaxCodes
-  const taxRates = await qbClient.getTaxRates();
-  const taxCodes = await qbClient.getTaxCodes();
-
-  // Buscar una tasa que sea del 13% (IVA Costa Rica) o la tasa más alta disponible
-  // Esto cubre el caso del cliente actual y es razonable como default
-  let targetRate = taxRates.find(r => Number(r.RateValue) === 13);
-  
-  if (!targetRate && taxRates.length > 0) {
-    // Si no hay 13%, tomar la tasa activa más alta como default
-    targetRate = taxRates
-      .filter(r => r.Active !== false)
-      .sort((a, b) => Number(b.RateValue) - Number(a.RateValue))[0];
-  }
-
-  if (targetRate) {
-    tenant.preferences.defaultTaxRateId = targetRate.Id;
-    tenant.preferences.defaultTaxRatePercent = Number(targetRate.RateValue);
-    logger.info(`[AuthService] TaxRate descubierto: "${targetRate.Name}" (ID: ${targetRate.Id}, ${targetRate.RateValue}%)`);
-
-    // Buscar el TaxCode que usa este TaxRate
-    const matchingCode = taxCodes.find(tc => {
-      if (!tc.SalesTaxRateList?.TaxRateDetail) return false;
-      return tc.SalesTaxRateList.TaxRateDetail.some(
-        detail => String(detail.TaxRateRef?.value) === String(targetRate.Id)
-      );
-    });
-
-    if (matchingCode) {
-      tenant.preferences.defaultTaxCodeId = matchingCode.Id;
-      logger.info(`[AuthService] TaxCode descubierto: "${matchingCode.Name}" (ID: ${matchingCode.Id})`);
-    }
-  }
-
-  await tenant.save();
-  logger.info('[AuthService] Preferencias de QB guardadas', { tenantId });
 }
 
 /**

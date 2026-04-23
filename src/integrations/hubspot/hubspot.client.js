@@ -256,7 +256,7 @@ async function getLineItemsByDealId(dealId) {
 
     const batchPayload = {
       inputs: lineItemIds,
-      properties: ["name", "price", "quantity", "hs_sku", "description", "es_gravable"],
+      properties: ["name", "price", "quantity", "hs_sku", "description"],
     };
     const detailsResponse = await hsClient.post("/crm/v3/objects/line_items/batch/read", batchPayload);
     return detailsResponse.data.results;
@@ -272,7 +272,7 @@ async function getLineItemsByDealId(dealId) {
 
 async function getProductDetails(productId) {
   try {
-    const properties = "name,price,description,hs_sku,id_producto_quickbooks,es_gravable,hs_price_usd";
+    const properties = "name,description,hs_sku,id_producto_quickbooks,hs_price_usd,hs_product_type,cuenta_de_ingresos,impuesto_sobre_las_ventas";
     const response = await hsClient.get(`/crm/v3/objects/products/${productId}?properties=${properties}`);
     return response.data;
   } catch (error) {
@@ -393,8 +393,8 @@ async function getLineItemsDetails(lineItemIds) {
       inputs: lineItemIds.map(id => ({ id })),
       // Añadimos campos críticos para descuentos absolutos e impuestos por línea
       properties: [
-        "name", "price", "quantity", "hs_sku", "description", 
-        "id_producto_quickbooks", "es_gravable", 
+        "name", "price", "quantity", "hs_sku", "description",
+        "id_producto_quickbooks",
         "hs_tax_rate_group_id", "hs_product_id",
         "amount", "discount", "hs_pre_discount_amount"
       ]

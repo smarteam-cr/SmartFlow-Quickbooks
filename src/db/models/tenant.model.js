@@ -22,11 +22,10 @@ const tenantSchema = new mongoose.Schema({
     environment: { type: String, enum: ['sandbox', 'production'], default: 'sandbox' }
   },
   
-  // Preferencias operativas descubiertas automáticamente vía QB API durante OAuth
+  // Preferencias operativas del tenant
   preferences: {
-    defaultTaxCodeId: { type: String },      // ID del TaxCode en QB (el del dropdown)
-    defaultTaxRateId: { type: String },      // ID del TaxRate dentro de ese TaxCode
-    defaultTaxRatePercent: { type: Number }, // Porcentaje (ej: 13)
+    // Mapeo entre internal values del dropdown de tax en HS (hs_tax_rate_group_id)
+    // y los TaxCode IDs de QB. Se configura vía src/scripts/configure-tax-mappings.js.
     taxMappings: { type: Map, of: String }
   }
 }, { timestamps: true });

@@ -398,40 +398,6 @@ async function linkPaymentToInvoice(paymentId, syncToken, qbInvoiceId, amount, c
   }
 }
 
-/**
- * Obtiene todas las tasas de impuesto (TaxRate) del QuickBooks del cliente.
- * Cada TaxRate tiene: Id, Name, RateValue (el porcentaje, ej: 13).
- */
-async function getTaxRates() {
-  try {
-    const baseUrl = await getBaseResourceUrl();
-    const query = 'SELECT * FROM TaxRate';
-    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
-    return response.data.QueryResponse.TaxRate || [];
-  } catch (error) {
-    const detail = extractAxiosError(error);
-    logger.error(`Error obteniendo TaxRates de QuickBooks: ${detail}`);
-    throw new Error(detail);
-  }
-}
-
-/**
- * Obtiene todos los códigos de impuesto (TaxCode) del QuickBooks del cliente.
- * Cada TaxCode tiene: Id, Name, y referencia a los TaxRates que lo componen.
- */
-async function getTaxCodes() {
-  try {
-    const baseUrl = await getBaseResourceUrl();
-    const query = 'SELECT * FROM TaxCode';
-    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
-    return response.data.QueryResponse.TaxCode || [];
-  } catch (error) {
-    const detail = extractAxiosError(error);
-    logger.error(`Error obteniendo TaxCodes de QuickBooks: ${detail}`);
-    throw new Error(detail);
-  }
-}
-
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -451,6 +417,4 @@ module.exports = {
   createPayment,
   findPaymentByRefNumber,
   linkPaymentToInvoice,
-  getTaxRates,
-  getTaxCodes,
 };

@@ -33,7 +33,7 @@ const qbWebhookSchema = {
 
 async function webhookRoutes(fastify, options) {
   // QuickBooks: Validamos firma e integridad del esquema
-  fastify.post('/quickbooks-pruebas', {
+  fastify.post('/quickbooks-pruebas22', {
     schema: qbWebhookSchema,
     preHandler: authMiddleware.validateIntuitSignature
   }, webhookController.handleQuickBooksWebhook);
