@@ -231,7 +231,7 @@ async function updateItem(itemId, syncToken, itemData) {
 async function createInvoice(invoicePayload) {
   try {
     const baseUrl = await getBaseResourceUrl();
-    const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, invoicePayload);
+    const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65&AutoDocNumber=true`, invoicePayload);
     return response.data.Invoice;
   } catch (error) {
     const detail = extractAxiosError(error);

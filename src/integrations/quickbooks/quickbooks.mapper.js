@@ -27,7 +27,7 @@ const mapLineItemToQb = (hsItem, qbItemId, taxCodeId) => {
   };
 };
 
-const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs = 0) => {
+const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs = 0, qbCustomer = null) => {
   const payload = {
     CustomerRef: { value: qbCustomerId.toString() },
     // QB calcula TxnTaxDetail automáticamente a partir de los TaxCodeRef de cada línea.
@@ -44,6 +44,18 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo,
     const { displayName, address, city, state, zip, country } = contactInfo;
     const addressParts = [address, city, state, zip, country].filter(part => !!part);
     payload.BillAddr = { Line1: displayName, Line2: addressParts.join(', ') };
+  }
+
+  if (qbCustomer) {
+    if (qbCustomer.SalesTermRef?.value) {
+      payload.SalesTermRef = { value: qbCustomer.SalesTermRef.value };
+    }
+    if (qbCustomer.PaymentMethodRef?.value) {
+      payload.PaymentMethodRef = { value: qbCustomer.PaymentMethodRef.value };
+    }
+    if (qbCustomer.PrimaryEmailAddr?.Address) {
+      payload.BillEmail = { Address: qbCustomer.PrimaryEmailAddr.Address };
+    }
   }
 
   return payload;

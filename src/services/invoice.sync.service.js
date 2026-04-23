@@ -164,7 +164,11 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       qbInvoiceLines.push(mappedLine);
     }
 
-    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs);
+    // Leer el customer de QB para heredar terms, email y método de pago en la factura.
+    // QB no los autocompleta por API (solo la UI lo hace), así que los copiamos explícitamente.
+    const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs, qbCustomer);
     
     logger.info(`📝 Creando factura en QuickBooks...`);
     const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);

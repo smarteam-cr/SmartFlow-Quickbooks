@@ -6,7 +6,7 @@ const companySyncService = require('./company.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID, CONTACT_STATUS_PROPERTY, CONTACT_STATUS_VALUES } = require('../config/constants');
-const { InactiveParentError } = require('../utils/errors.util');
+const { InactiveParentError, MissingIdentityError } = require('../utils/errors.util');
 
 /**
  * Normaliza el campo de estado. Vacío/null/inválido se interpreta como 'active'.
@@ -92,7 +92,10 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
     logger.error(`❌ Error al obtener detalles del Contacto HS ID ${hsContactId}: ${error.message}`, { hsContactId, error: error.message });
     return null;
   }
-  if (!hsContact || !hsContact.properties?.documento_de_identidad) return null;
+  if (!hsContact) return null;
+  if (!hsContact.properties?.documento_de_identidad) {
+    throw new MissingIdentityError(`Contacto HS ${hsContactId} sin documento_de_identidad. Se omite el sync con QuickBooks.`);
+  }
 
   try {
     let qbParentId = null;

@@ -65,6 +65,12 @@ class InactiveParentError extends SkipJobError {
   }
 }
 
+class MissingIdentityError extends SkipJobError {
+  constructor(message = 'Contacto sin documento_de_identidad: no se puede sincronizar con QuickBooks.') {
+    super(message, 'MISSING_IDENTITY');
+  }
+}
+
 module.exports = {
   AppError,
   ValidationError,
@@ -75,4 +81,5 @@ module.exports = {
   SkipJobError,
   InactiveCustomerError,
   InactiveParentError,
+  MissingIdentityError,
 };
