@@ -231,7 +231,7 @@ async function updateItem(itemId, syncToken, itemData) {
 async function createInvoice(invoicePayload) {
   try {
     const baseUrl = await getBaseResourceUrl();
-    const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65&AutoDocNumber=true`, invoicePayload);
+    const response = await qbClient.post(`${baseUrl}/invoice?minorversion=65`, invoicePayload);
     return response.data.Invoice;
   } catch (error) {
     const detail = extractAxiosError(error);
@@ -400,6 +400,56 @@ async function linkPaymentToInvoice(paymentId, syncToken, qbInvoiceId, amount, c
   }
 }
 
+/**
+ * Busca los últimos invoices en QB y retorna el máximo DocNumber numérico
+ * con su longitud de zero-padding original. Se usa para calcular el próximo
+ * DocNumber cuando el tenant tiene Custom Transaction Numbers activado y
+ * QB no auto-numera por API.
+ *
+ * Retorna: { lastNumber: 647, paddingLength: 6 }  // para "000647"
+ *          { lastNumber: 0,   paddingLength: 0 }  // si no hay invoices
+ */
+async function getLastInvoiceDocNumber() {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const query = "SELECT * FROM Invoice ORDERBY MetaData.CreateTime DESC MAXRESULTS 10";
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    const invoices = response.data.QueryResponse?.Invoice || [];
+
+    let lastNumber = 0;
+    let paddingLength = 0;
+    for (const inv of invoices) {
+      if (!inv.DocNumber) continue;
+      const n = parseInt(inv.DocNumber, 10);
+      if (!isNaN(n) && n > lastNumber) {
+        lastNumber = n;
+        paddingLength = inv.DocNumber.length;
+      }
+    }
+    return { lastNumber, paddingLength };
+  } catch (error) {
+    const detail = extractAxiosError(error);
+    logger.error(`Error consultando último DocNumber de Invoice en QB: ${detail}`);
+    throw new Error(detail);
+  }
+}
+
+/**
+ * Lee las preferencias de la empresa en QB.
+ * Útil para heredar SalesEmailCc, SalesEmailBcc y DefaultTerms al crear facturas.
+ */
+async function getCompanyPreferences() {
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const response = await qbClient.get(`${baseUrl}/preferences?minorversion=65`);
+    return response.data.Preferences;
+  } catch (error) {
+    const detail = extractAxiosError(error);
+    logger.error(`Error obteniendo Preferences de la empresa en QB: ${detail}`);
+    throw new Error(detail);
+  }
+}
+
 module.exports = {
   qbClient,
   getPaymentDetails,
@@ -419,4 +469,6 @@ module.exports = {
   createPayment,
   findPaymentByRefNumber,
   linkPaymentToInvoice,
+  getLastInvoiceDocNumber,
+  getCompanyPreferences,
 };

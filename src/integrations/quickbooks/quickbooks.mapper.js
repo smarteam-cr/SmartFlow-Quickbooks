@@ -27,7 +27,7 @@ const mapLineItemToQb = (hsItem, qbItemId, taxCodeId) => {
   };
 };
 
-const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs = 0, qbCustomer = null) => {
+const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs = 0, qbCustomer = null, qbPreferences = null) => {
   const payload = {
     CustomerRef: { value: qbCustomerId.toString() },
     // QB calcula TxnTaxDetail automáticamente a partir de los TaxCodeRef de cada línea.
@@ -55,6 +55,20 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo,
     }
     if (qbCustomer.PrimaryEmailAddr?.Address) {
       payload.BillEmail = { Address: qbCustomer.PrimaryEmailAddr.Address };
+    }
+  }
+
+  if (qbPreferences) {
+    const salesPrefs = qbPreferences.SalesFormsPrefs || {};
+    // Fallback: si el customer no tiene SalesTermRef, usar el default de la empresa.
+    if (!payload.SalesTermRef && salesPrefs.DefaultTerms?.value) {
+      payload.SalesTermRef = { value: salesPrefs.DefaultTerms.value };
+    }
+    if (salesPrefs.SalesEmailCc?.Address) {
+      payload.BillEmailCc = { Address: salesPrefs.SalesEmailCc.Address };
+    }
+    if (salesPrefs.SalesEmailBcc?.Address) {
+      payload.BillEmailBcc = { Address: salesPrefs.SalesEmailBcc.Address };
     }
   }
 

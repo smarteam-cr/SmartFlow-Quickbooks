@@ -7,8 +7,19 @@ const mappingService = require('./mapping.service');
 const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
 const Tenant = require('../db/models/tenant.model');
 const logger = require('../lib/logger.lib');
+const { runSequentially } = require('../utils/mutex.util');
 const { DEFAULT_TENANT_ID, CONTACT_STATUS_VALUES } = require('../config/constants');
 const { InactiveCustomerError } = require('../utils/errors.util');
+
+/**
+ * Calcula el próximo DocNumber preservando el zero-padding original.
+ *   { lastNumber: 647, paddingLength: 6 }  → "000648"
+ *   { lastNumber: 0,   paddingLength: 0 }  → "1"
+ */
+function computeNextDocNumber({ lastNumber, paddingLength }) {
+  const next = (lastNumber || 0) + 1;
+  return paddingLength > 0 ? String(next).padStart(paddingLength, '0') : String(next);
+}
 
 /**
  * Resuelve el QB Item ID y su SalesTaxCodeRef para un Line Item de HubSpot.
@@ -164,14 +175,28 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       qbInvoiceLines.push(mappedLine);
     }
 
-    // Leer el customer de QB para heredar terms, email y método de pago en la factura.
-    // QB no los autocompleta por API (solo la UI lo hace), así que los copiamos explícitamente.
+    // Leer el customer + preferences de QB para heredar datos en la factura.
+    // QB no los autocompleta por API (solo la UI lo hace), así que los copiamos explícitamente:
+    //   - del customer:    SalesTermRef, PaymentMethodRef, BillEmail
+    //   - de preferences:  SalesEmailCc, SalesEmailBcc y DefaultTerms (fallback si el customer no tiene)
     const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+    const qbPreferences = await quickbooksClient.getCompanyPreferences().catch(() => null);
 
-    const qbInvoicePayload = qbMapper.mapInvoicePayload(hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs, qbCustomer);
-    
+    const qbInvoicePayload = qbMapper.mapInvoicePayload(
+      hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo, utcOffsetMs, qbCustomer, qbPreferences
+    );
+
+    // Con "Custom Transaction Numbers" activo en el tenant, QB no auto-numera por API.
+    // Calculamos el próximo DocNumber nosotros. Serializamos por tenant para evitar
+    // que 2 workers concurrentes computen el mismo número y uno falle con "Duplicate DocNumber".
     logger.info(`📝 Creando factura en QuickBooks...`);
-    const newQbInvoice = await quickbooksClient.createInvoice(qbInvoicePayload);
+    const newQbInvoice = await runSequentially(`invoice-create:${tenantId}`, async () => {
+      const lastInfo = await quickbooksClient.getLastInvoiceDocNumber();
+      const nextDocNumber = computeNextDocNumber(lastInfo);
+      qbInvoicePayload.DocNumber = nextDocNumber;
+      logger.info(`📄 DocNumber calculado: ${nextDocNumber} (anterior: ${lastInfo.lastNumber || 'ninguno'})`);
+      return await quickbooksClient.createInvoice(qbInvoicePayload);
+    });
     const qbInvoiceId = newQbInvoice.Id;
 
     // 6. Registro de Mapping
