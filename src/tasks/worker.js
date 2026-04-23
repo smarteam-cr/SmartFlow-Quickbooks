@@ -9,6 +9,7 @@ const mutex = require('../utils/mutex.util');
 const logger = require('../lib/logger.lib');
 const config = require('../config');
 const { SOURCES, ENTITIES, JOB_STATUS } = require('../config/constants');
+const { SkipJobError } = require('../utils/errors.util');
 
 const CONCURRENCY = config.worker.concurrency || 3;
 let activeJobs = 0;
@@ -33,9 +34,14 @@ async function processJob(job) {
     logger.info(`✅ Job [${_id}] completado en ${Date.now() - startTime}ms`);
 
   } catch (error) {
-    logger.error(`❌ Job [${_id}] falló: ${error.message}`, { 
-      correlationId, 
-      stack: config.nodeEnv !== 'production' ? error.stack : undefined 
+    if (error instanceof SkipJobError) {
+      logger.warn(`⏭️  Job [${_id}] omitido (${error.reason}): ${error.message}`, { correlationId });
+      await jobService.markSkipped(_id, `${error.reason}: ${error.message}`);
+      return;
+    }
+    logger.error(`❌ Job [${_id}] falló: ${error.message}`, {
+      correlationId,
+      stack: config.nodeEnv !== 'production' ? error.stack : undefined
     });
     await jobService.markFailed(_id, error.message, error.stack, error);
   }

@@ -42,11 +42,37 @@ class ConflictError extends AppError {
   }
 }
 
+/**
+ * Señala que un job debe marcarse como SKIPPED (no es un fallo técnico
+ * — es una regla de negocio que aborta limpiamente, sin reintentos).
+ */
+class SkipJobError extends AppError {
+  constructor(message = 'Job omitido por regla de negocio', reason = 'BUSINESS_RULE') {
+    super(message, 200, true);
+    this.reason = reason;
+  }
+}
+
+class InactiveCustomerError extends SkipJobError {
+  constructor(message = 'Cliente inactivo: se omite la sincronización.') {
+    super(message, 'INACTIVE_CUSTOMER');
+  }
+}
+
+class InactiveParentError extends SkipJobError {
+  constructor(message = 'Empresa padre inactiva: no se puede activar el sub-cliente.') {
+    super(message, 'INACTIVE_PARENT');
+  }
+}
+
 module.exports = {
   AppError,
   ValidationError,
   UnauthorizedError,
   ForbiddenError,
   NotFoundError,
-  ConflictError
+  ConflictError,
+  SkipJobError,
+  InactiveCustomerError,
+  InactiveParentError,
 };

@@ -3,7 +3,8 @@ const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const contactSyncService = require('./contact.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
-const { DEFAULT_TENANT_ID } = require('../config/constants');
+const { DEFAULT_TENANT_ID, CONTACT_STATUS_VALUES } = require('../config/constants');
+const { InactiveCustomerError } = require('../utils/errors.util');
 
 /**
  * --- SINCRONIZACIÓN HS -> QB (PAGOS) ---
@@ -28,7 +29,12 @@ async function syncPaymentToQuickbooks(hsPaymentId, tenantId = DEFAULT_TENANT_ID
         if (contactAssociations.length === 0) throw new Error(`Pago HS ${hsPaymentId} sin contacto.`);
 
         const contactId = contactAssociations[0];
-        const { qbCustomerId } = await contactSyncService.processContact(contactId, tenantId);
+        const { qbCustomerId, status: contactStatus } = await contactSyncService.processContact(contactId, tenantId);
+
+        // Fail-fast: si el contacto está inactivo, abortamos sin golpear QB.
+        if (contactStatus === CONTACT_STATUS_VALUES.INACTIVE) {
+            throw new InactiveCustomerError(`Pago HS ${hsPaymentId}: contacto ${contactId} está inactivo. No se crea el pago en QB.`);
+        }
 
         const qbPaymentPayload = {
             CustomerRef: { value: qbCustomerId.toString() },

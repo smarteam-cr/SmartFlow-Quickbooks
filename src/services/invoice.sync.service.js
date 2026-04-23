@@ -7,7 +7,8 @@ const mappingService = require('./mapping.service');
 const qbMapper = require('../integrations/quickbooks/quickbooks.mapper');
 const Tenant = require('../db/models/tenant.model');
 const logger = require('../lib/logger.lib');
-const { DEFAULT_TENANT_ID } = require('../config/constants');
+const { DEFAULT_TENANT_ID, CONTACT_STATUS_VALUES } = require('../config/constants');
+const { InactiveCustomerError } = require('../utils/errors.util');
 
 /**
  * Resuelve el QB Item ID y su SalesTaxCodeRef para un Line Item de HubSpot.
@@ -127,7 +128,12 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     const contactId = contactAssociations[0];
     const contactResult = await contactSyncService.processContact(contactId, tenantId);
     if (!contactResult?.qbCustomerId) throw new Error(`No se pudo resolver el Customer Ref para ${contactId}`);
-    const { qbCustomerId, contactInfo } = contactResult;
+    const { qbCustomerId, contactInfo, status: contactStatus } = contactResult;
+
+    // Fail-fast: si el contacto está inactivo, abortamos sin golpear QB.
+    if (contactStatus === CONTACT_STATUS_VALUES.INACTIVE) {
+      throw new InactiveCustomerError(`Factura HS ${invoiceId}: contacto ${contactId} está inactivo. No se crea la factura en QB.`);
+    }
 
     // 4. Cargar tenant (para utcOffset + taxMappings)
     const tenant = await Tenant.findOne({ tenantId });

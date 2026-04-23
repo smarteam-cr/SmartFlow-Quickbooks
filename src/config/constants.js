@@ -28,9 +28,16 @@ module.exports = {
     HS_PAYMENT: 'hs_payment',
   },
   
+  // Propiedad HS que refleja el estado Activo/Inactivo del contacto en QB
+  CONTACT_STATUS_PROPERTY: 'estado_del_contacto_qb',
+  CONTACT_STATUS_VALUES: {
+    ACTIVE: 'active',
+    INACTIVE: 'inactive',
+  },
+
   // Propiedades mapeadas de HubSpot que disparan sincronización
   MAPPED_HS_PROPS: {
-    contact: ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'hs_whatsapp_phone_number'],
+    contact: ['firstname', 'lastname', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'hs_whatsapp_phone_number', 'estado_del_contacto_qb'],
     company: ['name', 'nit', 'phone', 'domain', 'address', 'city', 'state', 'zip', 'country'],
     product: ['name', 'hs_price_usd', 'description', 'hs_sku', 'hs_product_type', 'cuenta_de_ingresos', 'impuesto_sobre_las_ventas'],
   },

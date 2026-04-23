@@ -5,7 +5,26 @@ const mappingService = require('./mapping.service');
 const companySyncService = require('./company.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
-const { DEFAULT_TENANT_ID } = require('../config/constants');
+const { DEFAULT_TENANT_ID, CONTACT_STATUS_PROPERTY, CONTACT_STATUS_VALUES } = require('../config/constants');
+const { InactiveParentError } = require('../utils/errors.util');
+
+/**
+ * Normaliza el campo de estado. Vacío/null/inválido se interpreta como 'active'.
+ * Solo se considera 'inactive' si el valor es exactamente 'inactive'.
+ */
+function normalizeHsStatus(rawValue) {
+  return rawValue === CONTACT_STATUS_VALUES.INACTIVE
+    ? CONTACT_STATUS_VALUES.INACTIVE
+    : CONTACT_STATUS_VALUES.ACTIVE;
+}
+
+function statusToQbActive(status) {
+  return status !== CONTACT_STATUS_VALUES.INACTIVE;
+}
+
+function qbActiveToStatus(active) {
+  return active === false ? CONTACT_STATUS_VALUES.INACTIVE : CONTACT_STATUS_VALUES.ACTIVE;
+}
 
 function normalizeHsContactToQb(hsContact, qbParentId) {
   const props = hsContact.properties || {};
@@ -13,12 +32,15 @@ function normalizeHsContactToQb(hsContact, qbParentId) {
   let displayName = `${props.firstname || ""} ${props.lastname || ""}`.trim();
   if (suffix) displayName = displayName ? `${displayName} ${suffix}` : suffix;
 
+  const status = normalizeHsStatus(props[CONTACT_STATUS_PROPERTY]);
+
   return {
     email: props.email || "", firstName: props.firstname || "", lastName: props.lastname || "",
     suffix, phone: props.phone || "", mobile: props.hs_whatsapp_phone_number || "",
     address: props.address || "", city: props.city || "",
     state: props.state || "", zip: props.zip || "",
-    country: props.country || "", parentRef: qbParentId, displayName
+    country: props.country || "", parentRef: qbParentId, displayName,
+    status, active: statusToQbActive(status),
   };
 }
 
@@ -89,7 +111,7 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       qbCustomerId = mapping.qbId;
       if (mapping.payloadHash === newHash) {
         logger.info(`⏩ Sin cambios reales (Hash coincide). Omitiendo actualización en QB.`);
-        return { qbCustomerId, contactInfo: normalizedData };
+        return { qbCustomerId, contactInfo: normalizedData, status: normalizedData.status };
       }
 
       logger.info(`📝 Cambios detectados. Actualizando cliente en QB...`);
@@ -98,6 +120,22 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       if (!currentQbData) {
         logger.warn(`⚠️ Cliente QB ${qbCustomerId} no encontrado (Borrado). No se puede actualizar.`);
         return { qbCustomerId };
+      }
+
+      // Pre-validación: si vamos a ACTIVAR un sub-customer, el padre debe estar activo en QB.
+      // QB rechaza la activación de un hijo con padre inactivo (HTTP 400).
+      const isActivating = normalizedData.active === true && currentQbData.Active === false;
+      const parentRef = currentQbData.ParentRef?.value;
+      if (isActivating && parentRef) {
+        const parentQb = await quickbooksClient.getCustomerById(parentRef).catch(() => null);
+        if (parentQb && parentQb.Active === false) {
+          logger.warn(`🛑 Contacto HS ${hsContactId} intenta activarse pero el padre QB ${parentRef} está inactivo. Revirtiendo HS a 'inactive'.`);
+          echoSuppression.markAsCreatedInHs(hsContactId);
+          await hubspotClient.updateContact(hsContactId, { [CONTACT_STATUS_PROPERTY]: CONTACT_STATUS_VALUES.INACTIVE }).catch(err => {
+            logger.warn(`No se pudo revertir el estado del contacto HS ${hsContactId}: ${err.message}`);
+          });
+          throw new InactiveParentError(`No se puede activar el contacto HS ${hsContactId}: la empresa padre QB ${parentRef} está inactiva. Activa primero la empresa.`);
+        }
       }
 
       echoSuppression.markAsCreatedInQb(qbCustomerId);
@@ -123,7 +161,7 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       echoSuppression.markAsCreatedInHs(hsContactId);
       await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
     }
-    return { qbCustomerId, contactInfo: normalizedData };
+    return { qbCustomerId, contactInfo: normalizedData, status: normalizedData.status };
   } catch (error) {
     logger.error(`❌ Error en processContact para HS ID ${hsContactId}: ${error.message}`, {
       hsContactId, tenantId, error: error.message, stack: error.stack
@@ -155,6 +193,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       city: qbCustomer.BillAddr?.City || "", state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
       zip: qbCustomer.BillAddr?.PostalCode || "", country: qbCustomer.BillAddr?.Country || "",
       documento_de_identidad: qbCustomer.Suffix || "",
+      [CONTACT_STATUS_PROPERTY]: qbActiveToStatus(qbCustomer.Active),
     };
 
     const newHash = generateHash({ ...hsProps, _parentRef: qbCustomer.ParentRef?.value || null });

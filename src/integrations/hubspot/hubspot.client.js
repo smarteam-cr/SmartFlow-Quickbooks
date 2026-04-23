@@ -24,7 +24,7 @@ hsClient.interceptors.request.use(async (reqConfig) => {
 
 async function getContactDetails(contactId) {
   try {
-    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks,documento_de_identidad";
+    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks,documento_de_identidad,estado_del_contacto_qb";
     const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}?properties=${properties}`);
     return response.data;
   } catch (error) {

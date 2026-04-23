@@ -133,6 +133,7 @@ async function createCustomer(customerData) {
       if (uri && !uri.startsWith('http')) uri = `https://${uri}`;
       payload.WebAddr = { URI: uri };
     }
+    if (typeof customerData.active === 'boolean') payload.Active = customerData.active;
 
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
@@ -313,6 +314,7 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
       if (uri && !uri.startsWith('http')) uri = `https://${uri}`;
       payload.WebAddr = { URI: uri };
     }
+    if (typeof customerData.active === 'boolean') payload.Active = customerData.active;
 
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
