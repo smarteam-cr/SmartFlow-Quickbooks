@@ -12,6 +12,7 @@ function normalizeHsCompanyToQb(company) {
         companyName: props.name || "", nit: props.nit || "", phone: props.phone || "",
         domain: props.domain || "", address: props.address || "", city: props.city || "",
         state: props.state || "", zip: props.zip || "", country: props.country || "",
+        preferredCurrency: props.moneda_de_preferencia || "",
         displayName: props.name || props.domain || `Company-${company.id}`
     };
 }

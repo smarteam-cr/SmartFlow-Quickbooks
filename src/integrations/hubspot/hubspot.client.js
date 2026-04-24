@@ -227,7 +227,7 @@ async function getAllContactsWithCompanyAssociations() {
 
 async function getCompanyDetails(companyId) {
   try {
-    const properties = ["name","nit","phone","domain","address","city","state","zip","country","id_usuario_quickbooks"].join(",");
+    const properties = ["name","nit","phone","domain","address","city","state","zip","country","id_usuario_quickbooks","moneda_de_preferencia"].join(",");
     const response = await hsClient.get(`/crm/v3/objects/companies/${companyId}?properties=${properties}`);
     return response.data;
   } catch (error) {

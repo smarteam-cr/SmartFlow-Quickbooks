@@ -49,6 +49,29 @@ function generateHash(payload) {
   return crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex');
 }
 
+/**
+ * QB exige que un sub-cliente tenga la misma CurrencyRef que su padre
+ * (error 6000). Como CurrencyRef es inmutable una vez creado el cliente,
+ * detectamos el mismatch ANTES de enviar el payload para evitar el crash
+ * y el retry loop. Si las monedas difieren, se omite el ParentRef: el
+ * contacto queda como cliente independiente en QB y la asociación en HS
+ * se preserva.
+ *
+ * Devuelve { compatible: true } cuando alguna moneda no está definida —
+ * dejamos que QB decida (o use home currency).
+ */
+async function checkParentCurrencyCompatibility(parentQbId, contactCurrency) {
+  if (!parentQbId || !contactCurrency) return { compatible: true };
+  const parentQb = await quickbooksClient.getCustomerById(parentQbId).catch(() => null);
+  const parentCurrency = parentQb?.CurrencyRef?.value || "";
+  if (!parentCurrency) return { compatible: true };
+  return {
+    compatible: parentCurrency === contactCurrency,
+    parentCurrency,
+    contactCurrency,
+  };
+}
+
 const _contactLocks = new Map();
 
 /**
@@ -174,6 +197,21 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
         }
       }
 
+      // Pre-chequeo de moneda del padre: QB rechaza sub-customers cuya
+      // CurrencyRef difiere del padre. Solo chequeamos si estamos cambiando
+      // el padre (evita warnings espurios y una llamada API innecesaria
+      // cuando el parent no cambia).
+      if (normalizedData.parentRef && normalizedData.parentRef !== currentQbData.ParentRef?.value) {
+        const contactQbCurrency = currentQbData.CurrencyRef?.value || "";
+        const check = await checkParentCurrencyCompatibility(normalizedData.parentRef, contactQbCurrency);
+        if (!check.compatible) {
+          logger.warn(
+            `⚠️ Moneda incompatible al asignar padre para contacto HS ${hsContactId}: contacto QB ${qbCustomerId}=${check.contactCurrency} vs padre QB ${normalizedData.parentRef}=${check.parentCurrency}. Se omite ParentRef en QB. La asociación en HS se preserva. Corrección requiere acción manual en QB (CurrencyRef es inmutable).`
+          );
+          normalizedData.parentRef = undefined;
+        }
+      }
+
       echoSuppression.markAsCreatedInQb(qbCustomerId);
       const updated = await quickbooksClient.updateCustomer(qbCustomerId, currentQbData.SyncToken, normalizedData);
 
@@ -188,17 +226,48 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
       let existingQbCustomer = await quickbooksClient.findCustomerBySuffix(normalizedData.suffix);
 
       if (!existingQbCustomer) {
+        // Mismo pre-chequeo que en el UPDATE: si la moneda del contacto
+        // nuevo difiere de la del padre, omitimos ParentRef para evitar
+        // el rechazo de QB (error 6000). El contacto se crea como cliente
+        // independiente; la asociación en HS se mantiene.
+        if (normalizedData.parentRef) {
+          const check = await checkParentCurrencyCompatibility(normalizedData.parentRef, normalizedData.preferredCurrency);
+          if (!check.compatible) {
+            logger.warn(
+              `⚠️ Moneda incompatible al crear contacto HS ${hsContactId} como sub-cliente: moneda intencion=${check.contactCurrency} vs padre QB ${normalizedData.parentRef}=${check.parentCurrency}. Creando como cliente independiente en QB. La asociación en HS se preserva.`
+            );
+            normalizedData.parentRef = undefined;
+          }
+        }
         existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
         echoSuppression.markAsCreatedInQb(existingQbCustomer.Id);
       }
       qbCustomerId = existingQbCustomer.Id;
+
+      // Backfill de moneda al crear: si HS no traía moneda_de_preferencia,
+      // copiar la que QB le asignó (home currency cuando no se mandó
+      // CurrencyRef, o la del customer pre-existente cuando vino por
+      // findCustomerBySuffix). CurrencyRef en QB es inmutable, así que este
+      // es el único momento limpio para alinear HS sin pelear con el drift
+      // check del UPDATE. Sin esto, la primera factura del contacto fallaría
+      // la validación de moneda (capa 1) por preferredCurrency vacío.
+      const hsBackfill = { id_usuario_quickbooks: String(qbCustomerId) };
+      const qbCurrency = existingQbCustomer.CurrencyRef?.value || "";
+      if (!normalizedData.preferredCurrency && qbCurrency) {
+        hsBackfill.moneda_de_preferencia = qbCurrency;
+        normalizedData.preferredCurrency = qbCurrency;
+        newHash = generateHash(normalizedData);
+        logger.info(`💱 Backfill de moneda en HS ${hsContactId}: "${qbCurrency}" (heredada de QB ${qbCustomerId}).`);
+      } else if (!normalizedData.preferredCurrency && !qbCurrency) {
+        logger.warn(`⚠️ Contacto HS ${hsContactId} sin moneda_de_preferencia y QB ${qbCustomerId} sin CurrencyRef. Las facturas de este contacto van a fallar la validación de moneda hasta rellenar el campo.`);
+      }
 
       await mappingService.upsertMapping({
         tenantId, entityType: 'contact', hsId: hsContactId, qbId: qbCustomerId,
         qbSyncToken: existingQbCustomer.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
       });
       echoSuppression.markAsCreatedInHs(hsContactId);
-      await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);
+      await hubspotClient.updateContact(hsContactId, hsBackfill);
     }
     return { qbCustomerId, contactInfo: normalizedData, status: normalizedData.status };
   } catch (error) {

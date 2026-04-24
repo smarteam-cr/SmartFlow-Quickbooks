@@ -85,13 +85,13 @@ async function handleHubSpotWebhook(request, reply) {
     // Casos especiales (Facturas y Line Items)
     if (event.objectTypeId === '0-53') {
       internalEntity = ENTITIES.INVOICE;
-      
+
       // --- ESCUDO PARA FACTURAS (hs_balance_due) ---
       if (type === 'object.propertyChange' && event.propertyName === 'hs_balance_due') {
         const balance = Number(event.propertyValue);
         if (isNaN(balance) || balance > 0) {
           logger.info(`[Webhook/HS] Factura ${targetId} con saldo parcial (${event.propertyValue}). Ignorando.`);
-          continue; 
+          continue;
         }
         event.subscriptionType = 'object.creation'; // Transformación para disparo en QB
       } else if (type === 'object.creation') {
@@ -99,6 +99,11 @@ async function handleHubSpotWebhook(request, reply) {
       }
     } else if (event.objectTypeId === '0-101') {
       internalEntity = ENTITIES.HS_PAYMENT;
+    } else if (event.objectTypeId === '0-7') {
+      // Products en HS siempre llegan con subscriptionType=object.* (no
+      // existe el alias clásico product.*); el objectTypeId es el único
+      // discriminador confiable.
+      internalEntity = ENTITIES.PRODUCT;
     }
 
     if (internalEntity) {
