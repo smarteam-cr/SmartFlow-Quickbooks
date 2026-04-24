@@ -71,6 +71,12 @@ class MissingIdentityError extends SkipJobError {
   }
 }
 
+class CurrencyMismatchError extends SkipJobError {
+  constructor(message = 'Moneda de factura y moneda_de_preferencia del contacto no coinciden.') {
+    super(message, 'CURRENCY_MISMATCH');
+  }
+}
+
 module.exports = {
   AppError,
   ValidationError,
@@ -82,4 +88,5 @@ module.exports = {
   InactiveCustomerError,
   InactiveParentError,
   MissingIdentityError,
+  CurrencyMismatchError,
 };

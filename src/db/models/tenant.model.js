@@ -26,7 +26,10 @@ const tenantSchema = new mongoose.Schema({
   preferences: {
     // Mapeo entre internal values del dropdown de tax en HS (hs_tax_rate_group_id)
     // y los TaxCode IDs de QB. Se configura vía src/scripts/configure-tax-mappings.js.
-    taxMappings: { type: Map, of: String }
+    taxMappings: { type: Map, of: String },
+    // Mapeo de código ISO de moneda → QB Account Id donde deben caer los pagos
+    // (DepositToAccountRef). Se configura vía src/scripts/configure-deposit-accounts.js.
+    depositAccounts: { type: Map, of: String }
   }
 }, { timestamps: true });
 

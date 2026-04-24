@@ -24,7 +24,7 @@ hsClient.interceptors.request.use(async (reqConfig) => {
 
 async function getContactDetails(contactId) {
   try {
-    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks,documento_de_identidad,estado_del_contacto_qb";
+    const properties = "email,firstname,lastname,company,phone,hs_whatsapp_phone_number,address,city,state,zip,country,id_usuario_quickbooks,documento_de_identidad,estado_del_contacto_qb,moneda_de_preferencia";
     const response = await hsClient.get(`/crm/v3/objects/contacts/${contactId}?properties=${properties}`);
     return response.data;
   } catch (error) {
@@ -349,7 +349,8 @@ async function getInvoiceDetails(invoiceId) {
       "fecha_estimada_pago",
       "hs_discounts_total",
       "hs_taxes_total",
-      "hs_amount_billed"
+      "hs_amount_billed",
+      "hs_currency"
     ].join(",");
     
     const response = await hsClient.get(`/crm/v3/objects/invoices/${invoiceId}?properties=${properties}`);

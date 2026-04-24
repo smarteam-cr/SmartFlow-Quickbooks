@@ -9,7 +9,7 @@ const Tenant = require('../db/models/tenant.model');
 const logger = require('../lib/logger.lib');
 const { runSequentially } = require('../utils/mutex.util');
 const { DEFAULT_TENANT_ID, CONTACT_STATUS_VALUES } = require('../config/constants');
-const { InactiveCustomerError } = require('../utils/errors.util');
+const { InactiveCustomerError, CurrencyMismatchError } = require('../utils/errors.util');
 
 /**
  * Calcula el próximo DocNumber preservando el zero-padding original.
@@ -146,6 +146,31 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       throw new InactiveCustomerError(`Factura HS ${invoiceId}: contacto ${contactId} está inactivo. No se crea la factura en QB.`);
     }
 
+    // Fail-fast capa 1 (HS-vs-HS): moneda de la factura debe coincidir con
+    // moneda_de_preferencia del contacto. Barato (sin APIs).
+    const hsCurrency = hsInvoice.properties.hs_currency || "";
+    const contactCurrency = contactInfo?.preferredCurrency || "";
+    if (hsCurrency !== contactCurrency) {
+      throw new CurrencyMismatchError(
+        `Factura HS ${invoiceId}: hs_currency="${hsCurrency}" no coincide con moneda_de_preferencia="${contactCurrency}" del contacto ${contactId}. Re-asocia la factura al contacto con la moneda correcta o cambia la moneda de la factura.`
+      );
+    }
+
+    // Fail-fast capa 2 (HS-vs-QB): como QB customer tiene CurrencyRef inmutable,
+    // validamos directo contra QB para protegernos de cualquier drift residual
+    // entre HS y QB (ej. alguien edita HS y el job de revert aún no corrió).
+    // Reutilizamos este fetch luego para heredar SalesTermRef, BillEmail, etc.
+    const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+    if (!qbCustomer) {
+      throw new Error(`No se pudo obtener QB customer ${qbCustomerId} para validar moneda de la factura ${invoiceId}.`);
+    }
+    const qbCustomerCurrency = qbCustomer.CurrencyRef?.value || "";
+    if (hsCurrency !== qbCustomerCurrency) {
+      throw new CurrencyMismatchError(
+        `Factura HS ${invoiceId}: hs_currency="${hsCurrency}" no coincide con CurrencyRef="${qbCustomerCurrency}" del QB customer ${qbCustomerId}. QB no permite cambiar moneda en customers existentes. Usa un contacto con la moneda correcta.`
+      );
+    }
+
     // 4. Cargar tenant (para utcOffset + taxMappings)
     const tenant = await Tenant.findOne({ tenantId });
     if (!tenant) throw new Error(`Tenant ${tenantId} no encontrado.`);
@@ -175,11 +200,9 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       qbInvoiceLines.push(mappedLine);
     }
 
-    // Leer el customer + preferences de QB para heredar datos en la factura.
-    // QB no los autocompleta por API (solo la UI lo hace), así que los copiamos explícitamente:
-    //   - del customer:    SalesTermRef, PaymentMethodRef, BillEmail
-    //   - de preferences:  SalesEmailCc, SalesEmailBcc y DefaultTerms (fallback si el customer no tiene)
-    const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
+    // Leer preferences de QB para heredar datos de la empresa en la factura.
+    // El qbCustomer ya lo fetcheamos arriba para validar moneda y lo reutilizamos
+    // aquí para heredar SalesTermRef, PaymentMethodRef, BillEmail.
     const qbPreferences = await quickbooksClient.getCompanyPreferences().catch(() => null);
 
     const qbInvoicePayload = qbMapper.mapInvoicePayload(

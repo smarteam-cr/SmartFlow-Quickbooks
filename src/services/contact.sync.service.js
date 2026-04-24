@@ -41,6 +41,7 @@ function normalizeHsContactToQb(hsContact, qbParentId) {
     state: props.state || "", zip: props.zip || "",
     country: props.country || "", parentRef: qbParentId, displayName,
     status, active: statusToQbActive(status),
+    preferredCurrency: props.moneda_de_preferencia || "",
   };
 }
 
@@ -60,10 +61,19 @@ async function processContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
 
   if (_contactLocks.has(lockKey)) {
     logger.info(`⏳ [Lock] Esperando proceso en curso para Contacto HS ${hsContactId}...`);
-    await _contactLocks.get(lockKey).catch(() => {});
-    const existing = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
-    if (existing?.qbId) return { qbCustomerId: existing.qbId };
-    return null;
+    try {
+      // Reutilizamos el resultado del proceso en curso para heredar contactInfo,
+      // status y cualquier otro campo que retorne _doProcessContact. Antes aquí
+      // se retornaba solo { qbCustomerId }, lo que dejaba sin contactInfo a los
+      // callers aguas abajo (ej. invoice sync) y rompía validaciones como la de
+      // moneda (preferredCurrency llegaba undefined → "").
+      return await _contactLocks.get(lockKey);
+    } catch (err) {
+      // Si el proceso original falló, fallback al mapping existente (comportamiento heredado).
+      const existing = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
+      if (existing?.qbId) return { qbCustomerId: existing.qbId };
+      return null;
+    }
   }
 
   const execution = _doProcessContact(hsContactId, tenantId);
@@ -106,7 +116,7 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
     }
 
     const normalizedData = normalizeHsContactToQb(hsContact, qbParentId);
-    const newHash = generateHash(normalizedData);
+    let newHash = generateHash(normalizedData);
     const mapping = await mappingService.findByHsId(tenantId, 'contact', hsContactId);
     let qbCustomerId = null;
 
@@ -141,6 +151,29 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
         }
       }
 
+      // Drift de moneda: QB no permite cambiar CurrencyRef en un customer existente.
+      // Si HS tiene una moneda distinta a la de QB, QB es la verdad inmutable:
+      // revertimos HS para que refleje QB. Previene que las validaciones de
+      // factura (HS-vs-HS) pasen con datos desincronizados y produzcan facturas
+      // en la moneda incorrecta.
+      const hsCurrency = normalizedData.preferredCurrency || "";
+      const qbCurrency = currentQbData.CurrencyRef?.value || "";
+      if (hsCurrency !== qbCurrency) {
+        if (qbCurrency) {
+          logger.warn(`⚠️ Drift de moneda en contacto HS ${hsContactId}: moneda_de_preferencia="${hsCurrency}" pero QB ${qbCustomerId} tiene CurrencyRef="${qbCurrency}" (inmutable). Re-alineando HS a "${qbCurrency}".`);
+          echoSuppression.markAsCreatedInHs(hsContactId);
+          await hubspotClient.updateContact(hsContactId, { moneda_de_preferencia: qbCurrency }).catch(err => {
+            logger.warn(`No se pudo revertir moneda_de_preferencia en HS ${hsContactId}: ${err.message}`);
+          });
+          // Reflejar el estado final en normalizedData y recomputar hash para
+          // que el mapping guarde el estado alineado (evita loops de hash-mismatch).
+          normalizedData.preferredCurrency = qbCurrency;
+          newHash = generateHash(normalizedData);
+        } else {
+          logger.warn(`⚠️ QB customer ${qbCustomerId} sin CurrencyRef. HS tiene moneda_de_preferencia="${hsCurrency}". No se modifica HS.`);
+        }
+      }
+
       echoSuppression.markAsCreatedInQb(qbCustomerId);
       const updated = await quickbooksClient.updateCustomer(qbCustomerId, currentQbData.SyncToken, normalizedData);
 
@@ -149,7 +182,10 @@ async function _doProcessContact(hsContactId, tenantId = DEFAULT_TENANT_ID) {
         qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
       });
     } else {
-      let existingQbCustomer = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
+      // Dedup primario por cédula (Suffix): la identidad es el documento,
+      // no el nombre. Evita duplicados cuando el nombre difiere ligeramente
+      // entre HS y QB pero se trata del mismo humano.
+      let existingQbCustomer = await quickbooksClient.findCustomerBySuffix(normalizedData.suffix);
 
       if (!existingQbCustomer) {
         existingQbCustomer = await quickbooksClient.createCustomer(normalizedData);
@@ -196,6 +232,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       city: qbCustomer.BillAddr?.City || "", state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
       zip: qbCustomer.BillAddr?.PostalCode || "", country: qbCustomer.BillAddr?.Country || "",
       documento_de_identidad: qbCustomer.Suffix || "",
+      moneda_de_preferencia: qbCustomer.CurrencyRef?.value || "",
       [CONTACT_STATUS_PROPERTY]: qbActiveToStatus(qbCustomer.Active),
     };
 
@@ -222,6 +259,14 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
       }
       let existingHsContact = await hubspotClient.searchContactByIdentification(idNumber);
       if (existingHsContact) {
+        // Protección: si el HS contact con esta cédula YA está linkeado a otro
+        // QB customer, abortamos. El primer link gana; el duplicado en QB queda
+        // huérfano a propósito (debe resolverlo un humano en QB).
+        const existingHsMapping = await mappingService.findByHsId(tenantId, 'contact', existingHsContact.id);
+        if (existingHsMapping && existingHsMapping.qbId !== String(qbCustomerId)) {
+          logger.warn(`🛑 Duplicado de cédula "${idNumber}" en QB. HS contact ${existingHsContact.id} ya está linkeado a QB ${existingHsMapping.qbId}. Se ignora el sync del QB ${qbCustomerId} a HS.`);
+          return;
+        }
         hsContactId = existingHsContact.id;
         echoSuppression.markAsCreatedInHs(hsContactId);
         await hubspotClient.updateContactProperty(hsContactId, qbCustomerId);

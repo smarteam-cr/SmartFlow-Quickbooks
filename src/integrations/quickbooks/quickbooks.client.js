@@ -134,6 +134,9 @@ async function createCustomer(customerData) {
       payload.WebAddr = { URI: uri };
     }
     if (typeof customerData.active === 'boolean') payload.Active = customerData.active;
+    if (customerData.preferredCurrency) {
+      payload.CurrencyRef = { value: customerData.preferredCurrency };
+    }
 
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
@@ -154,6 +157,36 @@ async function findCustomerByDisplayName(displayName) {
   } catch (error) {
     const detail = extractAxiosError(error);
     logger.error(`Error buscando cliente por DisplayName: ${detail}`);
+    throw new Error(detail);
+  }
+}
+
+/**
+ * Busca un Customer en QB por Suffix (documento de identidad).
+ * Se usa como dedup primario en el flujo HS→QB de contactos.
+ *
+ * Limitación de QB: la propiedad `Suffix` NO es queryable server-side
+ * (error 4001). Estrategia: hacemos LIKE sobre DisplayName (nuestro API
+ * y QB por default incluyen la cédula como sufijo del DisplayName) y
+ * luego filtramos client-side por Suffix exacto para eliminar falsos
+ * positivos (ej. cédula "1-1234" es substring de "1-12345").
+ */
+async function findCustomerBySuffix(suffix) {
+  if (!suffix) return null;
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const safeSuffix = String(suffix)
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'")
+      .replace(/[%_]/g, "");
+    const query = `SELECT * FROM Customer WHERE DisplayName LIKE '%${safeSuffix}%'`;
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    const candidates = response.data.QueryResponse.Customer || [];
+    const exactMatch = candidates.find(c => c.Suffix === suffix);
+    return exactMatch || null;
+  } catch (error) {
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando cliente por Suffix: ${detail}`);
     throw new Error(detail);
   }
 }
@@ -315,6 +348,9 @@ async function updateCustomer(qbCustomerId, syncToken, customerData) {
       payload.WebAddr = { URI: uri };
     }
     if (typeof customerData.active === 'boolean') payload.Active = customerData.active;
+    // customerData.preferredCurrency se ignora deliberadamente: QB no permite
+    // cambiar CurrencyRef de un customer existente (rechaza el update entero).
+    // El caller emite el warning si detecta divergencia con la moneda actual.
 
     const response = await qbClient.post(`${baseUrl}/customer?minorversion=65`, payload);
     return response.data.Customer;
@@ -456,6 +492,7 @@ module.exports = {
   findCustomerByEmail,
   createCustomer,
   findCustomerByDisplayName,
+  findCustomerBySuffix,
   getAllCustomers,
   findItemByName,
   createItem,
