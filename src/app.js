@@ -9,7 +9,6 @@ const rateLimit = require("@fastify/rate-limit");
 const loggerSource = require("./lib/logger.lib");
 
 const webhookRoutes = require("./routes/webhook.routes");
-const migrationRoutes = require("./routes/migration.routes.js");
 const authRoutes = require("./routes/auth.routes");
 const { correlationMiddleware } = require("./middlewares/correlation.middleware");
 
@@ -74,6 +73,5 @@ fastify.get("/", async (request, reply) => {
 
 fastify.register(webhookRoutes, { prefix: "/webhook" });
 fastify.register(authRoutes, { prefix: "/auth" });
-fastify.register(migrationRoutes);
 
 module.exports = fastify;
