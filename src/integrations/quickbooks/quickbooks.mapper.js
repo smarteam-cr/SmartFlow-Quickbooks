@@ -47,6 +47,15 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo,
   }
 
   if (qbCustomer) {
+    // CurrencyRef debe heredarse SIEMPRE del customer. Si no lo seteamos, QB
+    // asume la home currency del realm; cuando el customer está en una moneda
+    // distinta a la home (multi-currency activado), QB rechaza con
+    // "You can only use one foreign currency per transaction" (code=6000).
+    // Aunque el realm sea single-currency, mandar CurrencyRef explícito es
+    // idempotente y evita futuros bugs si el cliente activa multi-currency.
+    if (qbCustomer.CurrencyRef?.value) {
+      payload.CurrencyRef = { value: qbCustomer.CurrencyRef.value };
+    }
     if (qbCustomer.SalesTermRef?.value) {
       payload.SalesTermRef = { value: qbCustomer.SalesTermRef.value };
     }

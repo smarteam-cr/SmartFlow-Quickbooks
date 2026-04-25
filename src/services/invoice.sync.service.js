@@ -213,6 +213,19 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
     // Calculamos el próximo DocNumber nosotros. Serializamos por tenant para evitar
     // que 2 workers concurrentes computen el mismo número y uno falle con "Duplicate DocNumber".
     logger.info(`📝 Creando factura en QuickBooks...`);
+
+    // Resumen compacto de moneda + items + tax codes (útil para depurar code=6000
+    // y similares — ej. mezclar tax codes con sales-rate vs sin sales-rate dispara
+    // este error genérico aunque las monedas estén alineadas).
+    const diagLines = qbInvoicePayload.Line || [];
+    const diagItemRefs = diagLines
+      .filter(l => l.SalesItemLineDetail?.ItemRef?.value)
+      .map(l => l.SalesItemLineDetail.ItemRef.value);
+    const diagTaxRefs = diagLines
+      .map(l => l.SalesItemLineDetail?.TaxCodeRef?.value)
+      .filter(Boolean);
+    logger.info(`🔎 [Invoice] customer.CurrencyRef=${qbCustomer?.CurrencyRef?.value || '(none)'} | invoice.CurrencyRef=${qbInvoicePayload.CurrencyRef?.value || '(none)'} | ExchangeRate=${qbInvoicePayload.ExchangeRate ?? '(none)'} | itemIds=[${diagItemRefs.join(',')}] | taxCodeIds=[${diagTaxRefs.join(',')}]`);
+
     const newQbInvoice = await runSequentially(`invoice-create:${tenantId}`, async () => {
       const lastInfo = await quickbooksClient.getLastInvoiceDocNumber();
       const nextDocNumber = computeNextDocNumber(lastInfo);

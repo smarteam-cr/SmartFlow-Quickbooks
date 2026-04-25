@@ -3,6 +3,7 @@
  * Garantiza que los eventos para un mismo ID se procesen de forma secuencial (uno tras otro)
  * en lugar de ejecutarse en paralelo, evitando el "Stale Object Error" en QuickBooks.
  */
+const logger = require('../lib/logger.lib');
 const locks = new Map();
 
 async function runSequentially(id, taskFunction) {
