@@ -77,7 +77,8 @@ async function getPaymentDetails(paymentId) {
 async function findCustomerByEmail(email) {
   try {
     const baseUrl = await getBaseResourceUrl();
-    const query = `SELECT * FROM Customer WHERE PrimaryEmailAddr = '${email}'`;
+    const safeEmail = String(email).replace(/'/g, "\\'");
+    const query = `SELECT * FROM Customer WHERE PrimaryEmailAddr = '${safeEmail}'`;
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
@@ -150,7 +151,8 @@ async function createCustomer(customerData) {
 async function findCustomerByDisplayName(displayName) {
   try {
     const baseUrl = await getBaseResourceUrl();
-    const query = `SELECT * FROM Customer WHERE DisplayName = '${displayName}'`;
+    const safeName = String(displayName).replace(/'/g, "\\'");
+    const query = `SELECT * FROM Customer WHERE DisplayName = '${safeName}'`;
     const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
     const customerInfo = response.data.QueryResponse.Customer;
     return (customerInfo && customerInfo.length > 0) ? customerInfo[0] : null;
