@@ -3,12 +3,19 @@ require('dotenv').config();
 // 1. Validación de variables críticas al arranque (Fail Fast)
 const requiredEnvVars = [
   'MONGODB_URI',
-  'HUBSPOT_ACCESS_TOKEN', 
+  'HUBSPOT_ACCESS_TOKEN',
   'QB_CLIENT_ID',
   'QB_CLIENT_SECRET',
   'ENCRYPTION_KEY',
   'INTERNAL_API_KEY'
 ];
+
+// Los secretos de firma de webhook son requeridos en producción. En dev/test
+// se permiten ausentes porque el middleware aplica un bypass explícito en
+// esos ambientes; obligarlos rompería el flujo local sin aportar seguridad.
+if (process.env.NODE_ENV === 'production') {
+  requiredEnvVars.push('HUBSPOT_APP_SECRET', 'QB_WEBHOOK_VERIFIER_TOKEN');
+}
 
 for (const varName of requiredEnvVars) {
   if (!process.env[varName]) {

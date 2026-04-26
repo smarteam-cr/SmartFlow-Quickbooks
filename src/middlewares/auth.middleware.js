@@ -2,16 +2,21 @@ const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../lib/logger.lib');
 
+// Bypass de validación solo cuando el ambiente está EXPLÍCITAMENTE en dev/test.
+// Si NODE_ENV está vacío, undefined o tiene un valor inesperado, no se aplica
+// el bypass — evita que un deploy mal configurado en producción acepte webhooks
+// sin firma por accidente.
+const isDevOrTest = () => ['development', 'test'].includes(process.env.NODE_ENV);
+
 const validateHubSpotSignature = (request, reply, done) => {
-  // 🚧 [Security] Validación de firma HS omitida temporalmente (Modo Dev).
-  if (process.env.NODE_ENV !== 'production') {
-    logger.info('🚧 [Security] Validación de firma HS omitida temporalmente (Modo Dev).');
+  if (isDevOrTest()) {
+    logger.info('🚧 [Security] Validación de firma HS omitida (Modo Dev/Test).');
     return done();
   }
 
   if (!config.hubspot.appSecret) {
-    logger.warn('[Security] HUBSPOT_APP_SECRET no configurado. Saltando validación (Inseguro).');
-    return done();
+    logger.error('[Security] HUBSPOT_APP_SECRET no configurado en producción. Webhook rechazado.');
+    return reply.status(503).send({ status: 'error', message: 'Servidor mal configurado' });
   }
 
   const signature = request.headers['x-hubspot-signature-v3'] || request.headers['x-hubspot-signature'];
@@ -44,16 +49,14 @@ const validateHubSpotSignature = (request, reply, done) => {
 };
 
 const validateIntuitSignature = (request, reply, done) => {
-  // 🚧 |[Security] Validación de firma QB omitida temporalmente (Modo Dev).
-
-  if (process.env.NODE_ENV !== 'production') {
-    logger.info('🚧 [Security] Validación de firma QB omitida temporalmente (Modo Dev).');
+  if (isDevOrTest()) {
+    logger.info('🚧 [Security] Validación de firma QB omitida (Modo Dev/Test).');
     return done();
   }
 
   if (!config.quickbooks.verifierToken) {
-    logger.warn('[Security] QB_WEBHOOK_VERIFIER_TOKEN no configurado. Saltando validación.');
-    return done();
+    logger.error('[Security] QB_WEBHOOK_VERIFIER_TOKEN no configurado en producción. Webhook rechazado.');
+    return reply.status(503).send({ status: 'error', message: 'Servidor mal configurado' });
   }
 
   const signature = request.headers['intuit-signature'];
