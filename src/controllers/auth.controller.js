@@ -3,9 +3,12 @@
 // Responsabilidad: recibir HTTP, validar params, construir URLs, delegar lógica de tokens.
 // Preparado para multitenant: usa tenantId del query param o DEFAULT_TENANT_ID como fallback.
 
+const crypto = require('crypto');
 const config = require('../config');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
 const authService = require('../services/auth.service');
+const Tenant = require('../db/models/tenant.model');
+const OAuthState = require('../db/models/oauth_state.model');
 const { responseHelper } = require('../lib/response.lib');
 const logger = require('../lib/logger.lib');
 
@@ -27,7 +30,6 @@ const INTUIT_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
 async function connect(request, reply) {
   const tenantId = request.query.tenantId || DEFAULT_TENANT_ID;
 
-  // Validar que las credenciales OAuth están configuradas
   if (!config.quickbooks.clientId || !config.quickbooks.redirectUri) {
     logger.error('[Auth/Connect] Faltan QB_CLIENT_ID o QB_REDIRECT_URI en la configuración');
     return reply.status(500).send(
@@ -35,13 +37,25 @@ async function connect(request, reply) {
     );
   }
 
-  // Construir la URL de autorización con los parámetros que Intuit exige
+  // Evita generar states huérfanos contra tenants inexistentes (typos, enumeración)
+  const tenant = await Tenant.findOne({ tenantId });
+  if (!tenant) {
+    logger.warn('[Auth/Connect] Intento de conexión contra tenant inexistente', { tenantId, ip: request.ip });
+    return reply.status(404).send(responseHelper.error('Tenant no encontrado'));
+  }
+
+  // State aleatorio impredecible (CSRF protection). El tenantId real se resuelve
+  // en el callback haciendo lookup del state en MongoDB, no confiando en lo que
+  // venga en el query param.
+  const state = crypto.randomBytes(32).toString('hex');
+  await OAuthState.create({ state, tenantId });
+
   const params = new URLSearchParams({
     client_id: config.quickbooks.clientId,
     redirect_uri: config.quickbooks.redirectUri,
-    response_type: 'code',                          // Siempre 'code' en OAuth 2.0 Authorization Code Flow
-    scope: 'com.intuit.quickbooks.accounting',       // Permiso para acceder a datos contables
-    state: tenantId,                                 // Intuit lo devuelve tal cual en el callback
+    response_type: 'code',
+    scope: 'com.intuit.quickbooks.accounting',
+    state,
   });
 
   const authUrl = `${INTUIT_AUTH_URL}?${params.toString()}`;
@@ -82,7 +96,17 @@ async function callback(request, reply) {
     );
   }
 
-  const tenantId = state; // state contiene el tenantId que enviamos en connect
+  // Validar que el state fue emitido por nosotros y no expiró. Borrado atómico
+  // con findOneAndDelete garantiza uso único (anti-replay).
+  const stored = await OAuthState.findOneAndDelete({ state });
+  if (!stored) {
+    logger.warn('[Auth/Callback] State inválido o expirado', { state, ip: request.ip, correlationId: request.correlationId });
+    return reply.status(400).send(
+      responseHelper.error('State inválido o expirado. Inicia el flow nuevamente.')
+    );
+  }
+
+  const tenantId = stored.tenantId;
 
   try {
     const result = await authService.exchangeCodeForTokens(code, realmId, tenantId);
