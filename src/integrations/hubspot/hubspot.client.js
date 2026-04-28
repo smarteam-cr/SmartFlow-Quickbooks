@@ -619,7 +619,9 @@ async function getPaymentDetails(paymentId) {
   try {
     const properties = [
       "hs_reference_number",
-      "hs_total_collected_amount_after_refunds"
+      "hs_total_collected_amount_after_refunds",
+      "hs_internal_comment",
+      "hs_initiated_date"
     ].join(",");
 
     const response = await hsClient.get(`/crm/v3/objects/0-101/${paymentId}?properties=${properties}`);

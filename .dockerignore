@@ -1,0 +1,49 @@
+# Dependencias: se reinstalan limpio dentro del contenedor.
+# Si se copiaran del host podrían tener binarios compilados para otra arquitectura.
+node_modules
+
+# SECRETOS: nunca deben entrar a la imagen. La imagen es portable y podría
+# terminar en un registry público.
+.env
+.env.*
+!.env.example
+
+# Logs locales de desarrollo (los de runtime se montan vía volumen).
+logs
+
+# Artefactos de scripts de migración (se generan en runtime, no son input).
+migration-reports
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentación: no se necesita en runtime y aumenta el tamaño del contexto de build.
+CLAUDE.md
+README.md
+
+# Editores
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Los propios archivos de Docker no necesitan estar dentro del contenedor.
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Logs de npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Lock de Claude Code
+skills-lock.json
+
+# JSONs de configuración local (van como volumen, no dentro de la imagen)
+deposit-accounts.sandbox.json
+deposit-accounts.json
+tax-mappings.json
+config/

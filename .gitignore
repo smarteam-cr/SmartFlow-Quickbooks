@@ -145,12 +145,11 @@ vite.config.ts.timestamp-*
 .agents
 skills-lock.json
 
-# Scripts
-src/scripts/
-
 # Migrations
 migration-reports/
 
-# Tax mappings
+# Configuración por entorno (los .example.json sí van en el repo)
 tax-mappings.json
 deposit-accounts.sandbox.json
+deposit-accounts.json
+config/

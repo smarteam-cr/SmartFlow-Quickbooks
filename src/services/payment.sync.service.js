@@ -6,6 +6,7 @@ const logger = require('../lib/logger.lib');
 const Tenant = require('../db/models/tenant.model');
 const { DEFAULT_TENANT_ID, CONTACT_STATUS_VALUES } = require('../config/constants');
 const { InactiveCustomerError, CurrencyMismatchError } = require('../utils/errors.util');
+const { formatToQbDate } = require('../utils/date.util');
 
 /**
  * Lee el mapeo de cuentas de depósito del tenant y lo devuelve como objeto plano.
@@ -107,6 +108,7 @@ async function syncPaymentToQuickbooks(hsPaymentId, tenantId = DEFAULT_TENANT_ID
         const tenant = await Tenant.findOne({ tenantId });
         const depositAccounts = readDepositAccounts(tenant);
         const depositAccountId = depositAccounts[paymentCurrency];
+        const utcOffsetMs = tenant?.hubspot?.utcOffsetMilliseconds || 0;
 
         const qbPaymentPayload = {
             CustomerRef: { value: qbCustomerId.toString() },
@@ -118,6 +120,19 @@ async function syncPaymentToQuickbooks(hsPaymentId, tenantId = DEFAULT_TENANT_ID
             logger.info(`💰 Pago HS ${hsPaymentId} ruteado a cuenta QB ${depositAccountId} (${paymentCurrency}).`);
         } else {
             logger.warn(`⚠️ Tenant ${tenantId} sin preferences.depositAccounts.${paymentCurrency} configurado. QB usará la cuenta default.`);
+        }
+
+        // Mapeo de campos adicionales desde HS.
+        const privateNote = hsPayment.properties.hs_internal_comment;
+        if (privateNote) qbPaymentPayload.PrivateNote = privateNote;
+
+        const txnDate = formatToQbDate(hsPayment.properties.hs_initiated_date, utcOffsetMs);
+        if (txnDate) qbPaymentPayload.TxnDate = txnDate;
+
+        // QB no auto-rellena el "Preferred Payment Method" del customer cuando se crea
+        // un Payment vía API (a diferencia de la UI). Lo heredamos manualmente.
+        if (qbCustomer.PaymentMethodRef?.value) {
+            qbPaymentPayload.PaymentMethodRef = { value: qbCustomer.PaymentMethodRef.value };
         }
 
         const newQbPayment = await quickbooksClient.createPayment(qbPaymentPayload);
