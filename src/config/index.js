@@ -32,7 +32,7 @@ if (process.env.ENCRYPTION_KEY.length !== 64) {
 
 // 2. Objeto de configuración centralizado (Híbrido V1 -> V2)
 const config = {
-  port: parseInt(process.env.PORT, 10) || 3000,
+  port: parseInt(process.env.PORT, 10) || 3001,
   nodeEnv: process.env.NODE_ENV || 'development',
   
   hubspot: {
