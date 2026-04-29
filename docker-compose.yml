@@ -4,48 +4,38 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: smartflow-quickbooks
-    # Reemplaza a PM2: si el proceso muere por crash, Docker lo reinicia.
-    # 'unless-stopped' respeta `docker compose stop` manual; 'always' no.
     restart: unless-stopped
-
-    # Carga el .env del host como variables de entorno del contenedor.
-    # El archivo .env NO se copia dentro de la imagen (está en .dockerignore).
     env_file: .env
-
     ports:
-      # Bindeamos SOLO a 127.0.0.1 (loopback del VPS). Nginx, que corre en el
-      # host, hará proxy_pass a http://127.0.0.1:3000. El puerto 3000 NO es
-      # accesible desde internet. Si pusiéramos solo "3000:3000" se abriría
-      # al mundo, ignorando el firewall en muchos casos por las reglas iptables
-      # que Docker inyecta automáticamente.
-      - "127.0.0.1:3000:3000"
-
+      - "127.0.0.1:3001:3000"
     volumes:
-      # Bind mount: persiste los archivos de Winston (logs/app-*.log y logs/error-*.log)
-      # en el host. Si el contenedor se recrea, los logs sobreviven.
       - ./logs:/app/logs
-
-      # Configuración específica del entorno (tax-mappings.json, deposit-accounts.json).
-      # Read-only porque los scripts solo LEEN estos archivos. Si alguien intentara
-      # escribir desde dentro del contenedor, fallaría.
       - ./config:/app/config:ro
-
-      # Reportes de migración generados por migrate-qb-contacts.js.
-      # Se persisten en el host para auditoría posterior.
       - ./migration-reports:/app/migration-reports
-
-    extra_hosts:
-      # Mapea host.docker.internal al gateway del host. Esto permite que la app
-      # dentro del contenedor llegue a MongoDB instalado en el VPS host.
-      # Cambia tu MONGODB_URI a: mongodb://host.docker.internal:27017/<dbname>
-      - "host.docker.internal:host-gateway"
-
+    depends_on:
+      - mongodb
+    networks:
+      - smartflow-net
     healthcheck:
-      # Llama a GET / (que devuelve "API funcionando satisfactoriamente") cada 30s.
-      # Si falla 3 veces seguidas, Docker marca el contenedor 'unhealthy' (no lo reinicia,
-      # pero lo verás en `docker ps`). start_period le da 15s al boot antes de empezar a checar.
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  mongodb:
+    image: mongo:7
+    container_name: smartflow-mongo
+    restart: unless-stopped
+    command: --replSet rs0
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - smartflow-net
+
+volumes:
+  mongo-data:
+
+networks:
+  smartflow-net:
+    driver: bridge
