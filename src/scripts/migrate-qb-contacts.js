@@ -4,7 +4,12 @@
  * Procesa QB customers con `CompanyName` poblado pero sin `GivenName`/`FamilyName`:
  * los enlaza al contacto HS correspondiente (por email) o los crea en HS, y
  * reestructura el QB customer para que el sync normal los reconozca como
- * personas en adelante (GivenName = CompanyName, Suffix = email, CompanyName limpio).
+ * personas en adelante (GivenName = CompanyName, Suffix = Notes, CompanyName limpio).
+ *
+ * Condiciones de elegibilidad:
+ *   1. CompanyName poblado, GivenName y FamilyName vacíos.
+ *   2. Email presente y único entre TODOS los customers activos de QB.
+ *   3. Notes presente, empieza con dígito (0-9), máximo 16 chars, y único entre TODOS los customers activos de QB.
  *
  * Uso:
  *   node src/scripts/migrate-qb-contacts.js [--limit=N] [--dry-run]
@@ -14,6 +19,9 @@
  *   2. Pausar el worker (comentar await startWorker() en src/server.js y reiniciar)
  *   3. Desactivar webhooks en HubSpot y QuickBooks (o instruir al equipo que no toque QB)
  *   4. Hacer backup de la colección entitymappings en MongoDB
+ *
+ * Idempotencia: customers con EntityMapping existente se saltan automáticamente (already_mapped).
+ * Para reintentar fallidos: volver a correr el script; los ya migrados se saltan, los fallidos se reintentan.
  */
 
 require('dotenv').config();
@@ -129,7 +137,7 @@ async function updateQbForMigration(customer, givenName, suffix) {
   }
 }
 
-function buildHashForMapping(customer, givenName, suffixEmail) {
+function buildHashForMapping(customer, givenName, suffix) {
   // Debe coincidir con el hash que syncCustomerFromQuickbooks calcularía después
   // de la migración, para que el primer webhook post-migración haga hash-match.
   const hsProps = {
@@ -143,7 +151,7 @@ function buildHashForMapping(customer, givenName, suffixEmail) {
     state: customer.BillAddr?.CountrySubDivisionCode || '',
     zip: customer.BillAddr?.PostalCode || '',
     country: customer.BillAddr?.Country || '',
-    documento_de_identidad: suffixEmail,
+    documento_de_identidad: suffix,
   };
   return md5({ ...hsProps, _parentRef: customer.ParentRef?.value || null });
 }
@@ -152,7 +160,7 @@ async function processCustomer(customer) {
   const qbId = String(customer.Id);
   const rawEmail = customer.PrimaryEmailAddr?.Address || '';
   const email = rawEmail.trim();
-  const suffix = normalizeEmail(email).slice(0, 16); // QB Suffix max 16 chars
+  const suffix = (customer.Notes || '').trim(); // Identity key: Notes → Suffix (QB) / documento_de_identidad (HS)
   const companyName = customer.CompanyName.trim();
 
   const existingMapping = await mappingService.findByQbId(tenantId, 'contact', qbId);
@@ -209,7 +217,7 @@ async function processCustomer(customer) {
     hsStatus = 'created_new';
   }
 
-  // 2. Actualizar QB: CompanyName → GivenName, Suffix = primeros 16 chars del email, CompanyName limpio
+  // 2. Actualizar QB: CompanyName → GivenName, Suffix = Notes, CompanyName limpio. Notes se preserva en QB.
   const updatedQb = await updateQbForMigration(customer, companyName, suffix);
 
   // 3. EntityMapping con hash del estado post-migración
