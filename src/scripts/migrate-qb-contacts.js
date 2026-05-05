@@ -36,7 +36,7 @@ const LIMIT = (() => {
   return a ? parseInt(a.split('=')[1], 10) : null;
 })();
 const DRY_RUN = args.includes('--dry-run');
-const THROTTLE_MS = 250;
+const THROTTLE_MS = 500;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -46,6 +46,34 @@ function md5(payload) {
 
 function normalizeEmail(e) {
   return (e || '').trim().toLowerCase();
+}
+
+function csvField(val) {
+  return `"${String(val || '').replace(/"/g, '""')}"`;
+}
+
+function generateCsv(report) {
+  const header = 'qbId;companyName;email;notes;motivo_skip';
+  const rows = [];
+  for (const r of report.skippedNoEmail) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), '', '', 'sin_email'].join(';'));
+  }
+  for (const r of report.skippedDuplicateEmail) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', 'email_duplicado'].join(';'));
+  }
+  for (const r of report.skippedNoNotes) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', 'sin_notes'].join(';'));
+  }
+  for (const r of report.skippedInvalidNotes) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), csvField(r.notes), 'notes_invalido'].join(';'));
+  }
+  for (const r of report.skippedDuplicateNotes) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), csvField(r.notes), 'notes_duplicado'].join(';'));
+  }
+  for (const r of report.failed) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`error: ${r.error || ''}`)].join(';'));
+  }
+  return [header, ...rows].join('\n');
 }
 
 function isEligibleCustomer(c) {
@@ -241,6 +269,9 @@ async function run() {
     alreadyMapped: [],
     skippedNoEmail: [],
     skippedDuplicateEmail: [],
+    skippedNoNotes: [],
+    skippedInvalidNotes: [],
+    skippedDuplicateNotes: [],
     failed: []
   };
 
