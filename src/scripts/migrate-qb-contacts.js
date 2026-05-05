@@ -246,18 +246,19 @@ async function run() {
   const eligible = allCustomers.filter(isEligibleCustomer);
   console.log(`   Elegibles para migración: ${eligible.length}\n`);
 
-  // Detección de colisiones en los primeros 16 chars del email (límite del campo Suffix de QB)
-  const emailPrefixCount = new Map();
-  for (const c of eligible) {
+  // Pre-cómputo de frecuencias sobre TODOS los customers activos (no solo el cohort elegible)
+  const emailCount = new Map();
+  const notesCount = new Map();
+  for (const c of allCustomers) {
     const e = normalizeEmail(c.PrimaryEmailAddr?.Address);
-    if (!e) continue;
-    const prefix = e.slice(0, 16);
-    emailPrefixCount.set(prefix, (emailPrefixCount.get(prefix) || 0) + 1);
+    if (e) emailCount.set(e, (emailCount.get(e) || 0) + 1);
+    const n = (c.Notes || '').trim();
+    if (n) notesCount.set(n, (notesCount.get(n) || 0) + 1);
   }
-  const duplicatedEmails = new Set(
-    [...emailPrefixCount.entries()].filter(([, n]) => n > 1).map(([p]) => p)
-  );
-  console.log(`   Colisiones en primeros 16 chars de email: ${duplicatedEmails.size}\n`);
+  const emailDupes = [...emailCount.entries()].filter(([, n]) => n > 1).length;
+  const notesDupes = [...notesCount.entries()].filter(([, n]) => n > 1).length;
+  console.log(`   Emails duplicados en QB (todos): ${emailDupes}`);
+  console.log(`   Notes duplicados en QB (todos):  ${notesDupes}\n`);
 
   const report = {
     startedAt: new Date().toISOString(),
