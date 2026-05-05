@@ -356,21 +356,26 @@ async function run() {
   console.log('\n============================================================');
   console.log('  REPORTE FINAL');
   console.log('============================================================');
-  console.log(`  ✅ Procesados OK:           ${report.migrated.length}`);
-  console.log(`  ⏩ Ya enlazados (skip):     ${report.alreadyMapped.length}`);
-  console.log(`  ⚠️  Sin email (skip):        ${report.skippedNoEmail.length}`);
-  console.log(`  ⚠️  Email duplicado (skip):  ${report.skippedDuplicateEmail.length}`);
-  console.log(`  ❌ Fallidos:                ${report.failed.length}`);
+  console.log(`  ✅ Procesados OK:              ${report.migrated.length}`);
+  console.log(`  ⏩ Ya enlazados (skip):        ${report.alreadyMapped.length}`);
+  console.log(`  ⚠️  Sin email (skip):           ${report.skippedNoEmail.length}`);
+  console.log(`  ⚠️  Email duplicado (skip):     ${report.skippedDuplicateEmail.length}`);
+  console.log(`  ⚠️  Sin notes (skip):           ${report.skippedNoNotes.length}`);
+  console.log(`  ⚠️  Notes inválido (skip):      ${report.skippedInvalidNotes.length}`);
+  console.log(`  ⚠️  Notes duplicado (skip):     ${report.skippedDuplicateNotes.length}`);
+  console.log(`  ❌ Fallidos:                   ${report.failed.length}`);
   console.log('============================================================\n');
 
   const reportDir = path.join(process.cwd(), 'migration-reports');
   if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
-  const reportFile = path.join(
-    reportDir,
-    `migration-${Date.now()}${DRY_RUN ? '-dryrun' : ''}.json`
-  );
+  const fileTs = Date.now();
+  const fileSuffix = DRY_RUN ? '-dryrun' : '';
+  const reportFile = path.join(reportDir, `migration-${fileTs}${fileSuffix}.json`);
+  const csvFile = path.join(reportDir, `migration-${fileTs}${fileSuffix}.csv`);
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
-  console.log(`📄 Reporte guardado: ${reportFile}\n`);
+  fs.writeFileSync(csvFile, generateCsv(report));
+  console.log(`📄 Reporte JSON: ${reportFile}`);
+  console.log(`📄 Reporte CSV:  ${csvFile}\n`);
 
   await mongoose.disconnect();
   process.exit(0);
