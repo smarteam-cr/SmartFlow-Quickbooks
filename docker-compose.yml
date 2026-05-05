@@ -1,47 +1,54 @@
+version: "3.9"
+
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: smartflow-quickbooks
-    restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
     ports:
-      - "127.0.0.1:3001:3001"
-    volumes:
-      - ./logs:/app/logs
-      - ./config:/app/config:ro
-      - ./migration-reports:/app/migration-reports
+      - "${PORT:-3000}:3000"
+    restart: unless-stopped
     depends_on:
       mongodb:
         condition: service_healthy
     networks:
       - smartflow-net
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
 
   mongodb:
     image: mongo:7
     container_name: smartflow-mongo
-    restart: unless-stopped
     command: ["--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongo-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - smartflow-net
-    healthcheck:
-      # En el primer arranque rs.status() falla; el catch llama a rs.initiate()
-      # y deja el replica set listo. En arranques siguientes solo verifica.
-      test: >
-        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}).ok }"
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - smartflow-net
+    entrypoint: ["sh", "-c"]
+    command: >
+      mongosh --host mongodb --quiet --eval '
+      try {
+        rs.status()
+      } catch (e) {
+        rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] })
+      }'
 
 volumes:
   mongo-data:
