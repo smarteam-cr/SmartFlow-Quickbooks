@@ -289,16 +289,32 @@ async function run() {
 
     if (!email) {
       report.skippedNoEmail.push({ qbId: customer.Id, companyName: customer.CompanyName });
-      console.log(`  [${processed}] ⚠️  sin email        → ${label}`);
+      console.log(`  [${processed}] ⚠️  sin email          → ${label}`);
       continue;
     }
 
-    if (duplicatedEmails.has(email.slice(0, 16))) {
-      report.skippedDuplicateEmail.push({
-        qbId: customer.Id, companyName: customer.CompanyName, email,
-        emailPrefix: email.slice(0, 16)
-      });
-      console.log(`  [${processed}] ⚠️  prefijo duplicado → ${label} (${email.slice(0, 16)}...)`);
+    if ((emailCount.get(email) || 0) > 1) {
+      report.skippedDuplicateEmail.push({ qbId: customer.Id, companyName: customer.CompanyName, email });
+      console.log(`  [${processed}] ⚠️  email duplicado    → ${label}`);
+      continue;
+    }
+
+    const notes = (customer.Notes || '').trim();
+    if (!notes) {
+      report.skippedNoNotes.push({ qbId: customer.Id, companyName: customer.CompanyName, email });
+      console.log(`  [${processed}] ⚠️  sin notes          → ${label}`);
+      continue;
+    }
+
+    if (!/^\d/.test(notes) || notes.length > 16) {
+      report.skippedInvalidNotes.push({ qbId: customer.Id, companyName: customer.CompanyName, email, notes });
+      console.log(`  [${processed}] ⚠️  notes inválido     → ${label} (${notes})`);
+      continue;
+    }
+
+    if ((notesCount.get(notes) || 0) > 1) {
+      report.skippedDuplicateNotes.push({ qbId: customer.Id, companyName: customer.CompanyName, email, notes });
+      console.log(`  [${processed}] ⚠️  notes duplicado    → ${label} (${notes})`);
       continue;
     }
 
