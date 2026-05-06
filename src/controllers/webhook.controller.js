@@ -21,7 +21,51 @@ async function handleQuickBooksWebhook(request, reply) {
   const payload = request.body;
   const tenantId = DEFAULT_TENANT_ID;
 
-  if (payload.eventNotifications) {
+  if (Array.isArray(payload)) {
+    // Formato CloudEvents (activo desde agosto 2026)
+    // type: "com.intuit.quickbooks.Customer.Create" → entityName="Customer", operation="Create"
+    logger.info(`[Webhook/QB] CloudEvents: ${payload.length} evento(s).`, { correlationId: request.correlationId });
+
+    for (const event of payload) {
+      const parts = (event.type || '').split('.');
+      if (parts.length < 2) continue;
+
+      const operation = parts[parts.length - 1];
+      const entityName = parts[parts.length - 2];
+      const entityId = String(event.intuitentityid || '');
+
+      if (!entityId) continue;
+
+      if (entityName === 'Invoice' && operation === 'Emailed') {
+        await jobService.createJob({
+          tenantId,
+          source: SOURCES.QUICKBOOKS,
+          entity: ENTITIES.INVOICE,
+          entityId,
+          eventType: 'qb.invoice.emailed',
+          payload: event,
+          correlationId: request.correlationId
+        });
+        continue;
+      }
+
+      const internalEntity = QB_ENTITY_MAP[entityName];
+      const validOps = ['Create', 'Update', 'Emailed'];
+
+      if (internalEntity && validOps.includes(operation)) {
+        await jobService.createJob({
+          tenantId,
+          source: SOURCES.QUICKBOOKS,
+          entity: internalEntity,
+          entityId,
+          eventType: `qb.${entityName.toLowerCase()}.${operation.toLowerCase()}`,
+          payload: event,
+          correlationId: request.correlationId
+        });
+      }
+    }
+  } else if (payload.eventNotifications) {
+    // Formato legacy (pre-CloudEvents)
     for (const notification of payload.eventNotifications) {
       for (const entity of notification.dataChangeEvent.entities) {
         // Caso especial: Factura enviada por email en QB

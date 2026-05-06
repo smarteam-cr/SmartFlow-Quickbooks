@@ -209,9 +209,6 @@ node src/scripts/migrate-qb-contacts.js                  # full run
 3. Backup `entitymappings` collection in MongoDB.
 4. Re-enable webhooks after script completes. The script is idempotent — already-mapped customers are skipped.
 
-### `reconcile.js`
-Audit script. Downloads HS contacts and QB customers, compares paginatedly, and reports gaps. Useful for one-off sync health checks.
-
 ## Production Setup Checklist
 
 When promoting a tenant to production with a new client, run in this order:

@@ -10,6 +10,7 @@ const loggerSource = require("./lib/logger.lib");
 
 const webhookRoutes = require("./routes/webhook.routes");
 const authRoutes = require("./routes/auth.routes");
+const staticRoutes = require("./routes/static.routes");
 const { correlationMiddleware } = require("./middlewares/correlation.middleware");
 
 // Fastify por defecto destruye el texto original al parsear JSON.
@@ -44,7 +45,7 @@ fastify.register(compress);
 fastify.register(rateLimit, {
   max: 100,
   timeWindow: "1 minute",
-  errorResponseBuilder: (request, context) => ({
+  errorResponseBuilder: (_request, context) => ({
     status: 'error',
     message: `Demasiadas peticiones. Intenta de nuevo en ${context.after}`
   })
@@ -67,10 +68,11 @@ fastify.setErrorHandler((error, request, reply) => {
 });
 
 // RUTAS
-fastify.get("/", async (request, reply) => {
+fastify.get("/", async () => {
   return { message: "API funcionando satisfactoriamente" };
 });
 
+fastify.register(staticRoutes);
 fastify.register(webhookRoutes, { prefix: "/webhook" });
 fastify.register(authRoutes, { prefix: "/auth" });
 
