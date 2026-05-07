@@ -13,7 +13,10 @@ function extractAxiosError(error) {
       const fault = data.Fault.Error[0];
       const detail = fault.Detail || fault.Message || '';
       const code = fault.code ? ` (code=${fault.code})` : '';
-      if (detail) return `${detail}${code}`;
+      const headers = error.response.headers || {};
+      const tid = headers['intuit_tid'] || headers['intuit-tid'];
+      const tidStr = tid ? ` [intuit_tid=${tid}]` : '';
+      if (detail) return `${detail}${code}${tidStr}`;
     }
 
     // Formato HubSpot estándar
