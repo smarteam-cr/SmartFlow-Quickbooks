@@ -16,6 +16,10 @@ services:
         condition: service_healthy
     networks:
       - smartflow-net
+    volumes:
+      - ./logs:/app/logs
+      - ./migration-reports:/app/migration-reports
+      - ./config:/app/config
 
   mongodb:
     image: mongo:7
