@@ -42,4 +42,16 @@ syncJobSchema.index({ tenantId: 1, status: 1, createdAt: 1 });
 syncJobSchema.index({ status: 1, nextRetryAt: 1 }); // Clave para el poller de reintentos
 syncJobSchema.index({ tenantId: 1, dedupeKey: 1 });
 
+// TTL: borra jobs cerrados (COMPLETED/SKIPPED/DEAD_LETTER) 30 días después de su completedAt.
+// PENDING/PROCESSING/RETRY_PENDING quedan excluidos por el partialFilterExpression.
+syncJobSchema.index(
+  { completedAt: 1 },
+  {
+    expireAfterSeconds: 60 * 60 * 24 * 30,
+    partialFilterExpression: {
+      status: { $in: [JOB_STATUS.COMPLETED, JOB_STATUS.SKIPPED, JOB_STATUS.DEAD_LETTER] }
+    }
+  }
+);
+
 module.exports = mongoose.model('SyncJob', syncJobSchema);

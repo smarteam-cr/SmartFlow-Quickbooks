@@ -86,6 +86,7 @@ async function markFailed(jobId, errorMessage, errorStack, errorObject = null) {
     lastErrorStack: errorStack,
     isRetryable,
     ...(nextRetryAt && { nextRetryAt }),
+    ...(newStatus === JOB_STATUS.DEAD_LETTER && { completedAt: new Date() }),
   }, { returnDocument: 'after' });
 }
 
