@@ -46,6 +46,11 @@ const LIMIT = (() => {
 const DRY_RUN = args.includes('--dry-run');
 const THROTTLE_MS = 500;
 
+// El dropdown HS `moneda_de_preferencia` solo acepta estos valores internos.
+// QB puede tener cualquier moneda habilitada en el realm; si no calza, se omite
+// el campo para no fallar el PATCH a HS y se reporta para revisión manual.
+const SUPPORTED_HS_CURRENCIES = new Set(['USD', 'CRC']);
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function md5(payload) {
@@ -77,6 +82,9 @@ function generateCsv(report) {
   }
   for (const r of report.skippedDuplicateNotes) {
     rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), csvField(r.notes), 'notes_duplicado'].join(';'));
+  }
+  for (const r of report.unsupportedCurrency) {
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`moneda_no_soportada:${r.qbCurrency}`)].join(';'));
   }
   for (const r of report.failed) {
     rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`error: ${r.error || ''}`)].join(';'));
@@ -137,7 +145,14 @@ async function updateQbForMigration(customer, givenName, suffix) {
   }
 }
 
-function buildHashForMapping(customer, givenName, suffix) {
+function resolveQbCurrencyForHs(customer) {
+  const qbCurrency = (customer.CurrencyRef?.value || '').trim();
+  if (!qbCurrency) return { value: '', supported: true, raw: '' };
+  if (SUPPORTED_HS_CURRENCIES.has(qbCurrency)) return { value: qbCurrency, supported: true, raw: qbCurrency };
+  return { value: '', supported: false, raw: qbCurrency };
+}
+
+function buildHashForMapping(customer, givenName, suffix, currencyValue) {
   // Debe coincidir con el hash que syncCustomerFromQuickbooks calcularía después
   // de la migración, para que el primer webhook post-migración haga hash-match.
   const hsProps = {
@@ -152,6 +167,7 @@ function buildHashForMapping(customer, givenName, suffix) {
     zip: customer.BillAddr?.PostalCode || '',
     country: customer.BillAddr?.Country || '',
     documento_de_identidad: suffix,
+    moneda_de_preferencia: currencyValue || '',
   };
   return md5({ ...hsProps, _parentRef: customer.ParentRef?.value || null });
 }
@@ -162,6 +178,7 @@ async function processCustomer(customer) {
   const email = rawEmail.trim();
   const suffix = (customer.Notes || '').trim(); // Identity key: Notes → Suffix (QB) / documento_de_identidad (HS)
   const companyName = customer.CompanyName.trim();
+  const currency = resolveQbCurrencyForHs(customer);
 
   const existingMapping = await mappingService.findByQbId(tenantId, 'contact', qbId);
   if (existingMapping) {
@@ -172,12 +189,22 @@ async function processCustomer(customer) {
     const found = await hubspotClient.searchContactByEmail(normalizeEmail(email));
     return {
       qbId, email, suffix, companyName,
+      qbCurrency: currency.raw,
+      currencySupported: currency.supported,
       status: found ? 'would_link' : 'would_create',
       hsContactId: found?.id || null
     };
   }
 
-  // 1. Resolver contacto en HS (link o create)
+  if (!currency.supported) {
+    console.warn(`     ⚠️  QB ${qbId} tiene CurrencyRef="${currency.raw}" no soportada por HS (solo USD/CRC). Se omite moneda_de_preferencia.`);
+  }
+
+  const currencyField = currency.value ? { moneda_de_preferencia: currency.value } : {};
+
+  // 1. Resolver contacto en HS (link o create). QB es source of truth: si HS
+  // tiene una moneda distinta o vacía, se sobrescribe con la de QB. Si QB no
+  // tiene CurrencyRef (o es no soportada), no se toca el campo en HS.
   const hsContact = await hubspotClient.searchContactByEmail(normalizeEmail(email));
   let hsContactId;
   let hsStatus;
@@ -196,6 +223,7 @@ async function processCustomer(customer) {
       state: customer.BillAddr?.CountrySubDivisionCode || '',
       zip: customer.BillAddr?.PostalCode || '',
       country: customer.BillAddr?.Country || '',
+      ...currencyField,
     });
     hsStatus = 'linked_existing';
   } else {
@@ -211,6 +239,7 @@ async function processCustomer(customer) {
       state: customer.BillAddr?.CountrySubDivisionCode || '',
       zip: customer.BillAddr?.PostalCode || '',
       country: customer.BillAddr?.Country || '',
+      ...currencyField,
     };
     const newContact = await hubspotClient.createSingleContact(hsProps, qbId);
     hsContactId = newContact.id;
@@ -221,7 +250,7 @@ async function processCustomer(customer) {
   const updatedQb = await updateQbForMigration(customer, companyName, suffix);
 
   // 3. EntityMapping con hash del estado post-migración
-  const payloadHash = buildHashForMapping(customer, companyName, suffix);
+  const payloadHash = buildHashForMapping(customer, companyName, suffix, currency.value);
   await mappingService.upsertMapping({
     tenantId,
     entityType: 'contact',
@@ -232,7 +261,12 @@ async function processCustomer(customer) {
     sourceSystem: 'QUICKBOOKS'
   });
 
-  return { qbId, email, companyName, hsContactId, status: hsStatus };
+  return {
+    qbId, email, companyName, hsContactId,
+    qbCurrency: currency.raw,
+    currencySupported: currency.supported,
+    status: hsStatus
+  };
 }
 
 async function run() {
@@ -281,6 +315,7 @@ async function run() {
     skippedNoNotes: [],
     skippedInvalidNotes: [],
     skippedDuplicateNotes: [],
+    unsupportedCurrency: [], // moneda en QB que no es USD/CRC; el contacto sí se migra pero sin moneda_de_preferencia
     failed: []
   };
 
@@ -328,6 +363,14 @@ async function run() {
 
     try {
       const result = await processCustomer(customer);
+      if (result.currencySupported === false) {
+        report.unsupportedCurrency.push({
+          qbId: result.qbId,
+          companyName: customer.CompanyName,
+          email,
+          qbCurrency: result.qbCurrency
+        });
+      }
       if (result.status === 'already_mapped') {
         report.alreadyMapped.push(result);
         console.log(`  [${processed}] ⏩  ya enlazado     → ${label}`);
@@ -363,6 +406,7 @@ async function run() {
   console.log(`  ⚠️  Sin notes (skip):           ${report.skippedNoNotes.length}`);
   console.log(`  ⚠️  Notes inválido (skip):      ${report.skippedInvalidNotes.length}`);
   console.log(`  ⚠️  Notes duplicado (skip):     ${report.skippedDuplicateNotes.length}`);
+  console.log(`  ⚠️  Moneda no soportada:        ${report.unsupportedCurrency.length} (migrados sin moneda_de_preferencia)`);
   console.log(`  ❌ Fallidos:                   ${report.failed.length}`);
   console.log('============================================================\n');
 
