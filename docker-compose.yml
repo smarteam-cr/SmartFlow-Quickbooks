@@ -12,6 +12,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     networks:
       - smartflow-net
     volumes:
