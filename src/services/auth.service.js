@@ -158,6 +158,7 @@ async function exchangeCodeForTokens(code, realmId, tenantId) {
   tenant.quickbooks.refreshTokenEncrypted = encrypt(refresh_token);
   tenant.quickbooks.tokenExpiresAt = new Date(Date.now() + expires_in * 1000);
   tenant.quickbooks.refreshTokenExpiresAt = new Date(Date.now() + x_refresh_token_expires_in * 1000);
+  tenant.quickbooks.environment = config.quickbooks.baseUrl.includes('sandbox') ? 'sandbox' : 'production';
 
   await tenant.save();
 
