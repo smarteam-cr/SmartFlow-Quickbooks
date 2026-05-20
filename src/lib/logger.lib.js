@@ -100,12 +100,12 @@ const transports = [
   }),
 ];
 
-// Console Transport: Only if not in production
-if (process.env.NODE_ENV !== 'production') {
-  transports.push(new winston.transports.Console({
-    format: consoleFormat,
-  }));
-}
+// Console Transport: siempre activo. En contenedores stdout es la fuente
+// primaria de logs (docker logs, kubectl logs, agregadores). Los archivos
+// rotados quedan como backup persistente en el bind-mount ./logs.
+transports.push(new winston.transports.Console({
+  format: consoleFormat,
+}));
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
