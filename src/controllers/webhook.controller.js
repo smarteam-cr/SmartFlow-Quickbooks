@@ -16,7 +16,6 @@ const QB_ENTITY_MAP = {
  * Maneja Webhooks de QuickBooks
  */
 async function handleQuickBooksWebhook(request, reply) {
-  // return reply.status(200).send('OK');
   console.log("--------------------------------------------QUICKBOOKS--------------------------------------------")
   const payload = request.body;
   const tenantId = DEFAULT_TENANT_ID;
@@ -109,7 +108,6 @@ async function handleQuickBooksWebhook(request, reply) {
 async function handleHubSpotWebhook(request, reply) {
   console.log("--------------------------------------------HUBSPOT--------------------------------------------")
   const events = request.body;
-  console.log(events)
   const tenantId = DEFAULT_TENANT_ID;
 
   logger.info(`[Webhook/HS] Recibidos ${events.length} eventos.`, { correlationId: request.correlationId });

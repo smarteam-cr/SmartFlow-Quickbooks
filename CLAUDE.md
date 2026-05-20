@@ -140,8 +140,8 @@ When adding a new business rule that should abort sync without consuming retries
 
 ### Webhook Endpoints & Routing
 
-- `POST /webhook/hubspot-pruebas-testing` — HubSpot events (HMAC validated; bypass flag in dev).
-- `POST /webhook/quickbooks-pruebas22` — QuickBooks events (Intuit signature validated; bypass flag in dev).
+- `POST /webhook/hubspot` — HubSpot events (HMAC validated; bypass flag in dev).
+- `POST /webhook/quickbooks` — QuickBooks events (Intuit signature validated; bypass flag in dev).
 
 **HubSpot routing** (`webhook.controller.js`):
 - `subscriptionType.startsWith('contact.')` → CONTACT
@@ -228,7 +228,7 @@ node src/scripts/configure-deposit-accounts.js --file=deposit-accounts.sandbox.j
 Sample JSON files (`tax-mappings.json`, `deposit-accounts.sandbox.json`) live at the project root. **Both contain real IDs that must come from the client's QB realm** — do not reuse sandbox IDs in production. Re-run either script whenever the client adds a new tax rate / currency / bank account that needs to be wired up.
 
 After all three steps complete, enable the HubSpot and QuickBooks webhook subscriptions pointing at:
-- `POST /webhook/hubspot-pruebas-testing`
-- `POST /webhook/quickbooks-pruebas22`
+- `POST /webhook/hubspot`
+- `POST /webhook/quickbooks`
 
 Confirm `auth.middleware.js` signature validation is **not** bypassed in the production env (the dev bypass flag must be off).
