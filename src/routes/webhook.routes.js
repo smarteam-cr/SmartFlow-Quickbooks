@@ -20,14 +20,26 @@ const hubspotWebhookSchema = {
 
 /**
  * Esquema de validación para Webhooks de QuickBooks.
+ * Acepta formato legacy (eventNotifications) y CloudEvents (array).
  */
 const qbWebhookSchema = {
   body: {
-    type: 'object',
-    required: ['eventNotifications'],
-    properties: {
-      eventNotifications: { type: 'array' }
-    }
+    oneOf: [
+      {
+        type: 'object',
+        required: ['eventNotifications'],
+        properties: {
+          eventNotifications: { type: 'array' }
+        }
+      },
+      {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['specversion', 'type', 'intuitentityid']
+        }
+      }
+    ]
   }
 };
 

@@ -21,19 +21,26 @@ async function handleQuickBooksWebhook(request, reply) {
   const tenantId = DEFAULT_TENANT_ID;
 
   if (Array.isArray(payload)) {
-    // Formato CloudEvents (activo desde agosto 2026)
-    // type: "com.intuit.quickbooks.Customer.Create" → entityName="Customer", operation="Create"
+    // Formato CloudEvents (obligatorio julio 2026)
+    // type: "qbo.customer.created.v1" → entity="customer", op="created"
     logger.info(`[Webhook/QB] CloudEvents: ${payload.length} evento(s).`, { correlationId: request.correlationId });
 
-    for (const event of payload) {
-      const parts = (event.type || '').split('.');
-      if (parts.length < 2) continue;
+    // Mapeo de entidad CloudEvents (minúsculas) → nombre interno PascalCase
+    const CE_ENTITY_MAP = { 'customer': 'Customer', 'item': 'Item', 'invoice': 'Invoice' };
+    // Mapeo de operación CloudEvents (pasado, minúsculas) → operación legacy PascalCase
+    const CE_OP_MAP = { 'created': 'Create', 'updated': 'Update', 'emailed': 'Emailed', 'deleted': 'Delete' };
 
-      const operation = parts[parts.length - 1];
-      const entityName = parts[parts.length - 2];
+    for (const event of payload) {
+      // "qbo.customer.created.v1" → ["qbo", "customer", "created", "v1"]
+      const parts = (event.type || '').split('.');
+      if (parts.length < 4) continue;
+
+      const entityRaw = parts[1];                    // "customer"
+      const entityName = CE_ENTITY_MAP[entityRaw];   // "Customer"
+      const operation = CE_OP_MAP[parts[2]];          // "Create"
       const entityId = String(event.intuitentityid || '');
 
-      if (!entityId) continue;
+      if (!entityName || !operation || !entityId) continue;
 
       if (entityName === 'Invoice' && operation === 'Emailed') {
         await jobService.createJob({
