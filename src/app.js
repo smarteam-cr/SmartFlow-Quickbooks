@@ -15,14 +15,17 @@ const { correlationMiddleware } = require("./middlewares/correlation.middleware"
 
 // Fastify por defecto destruye el texto original al parsear JSON.
 // Necesitamos el texto original (rawBody) para que las firmas HMAC de HubSpot y QuickBooks no fallen.
-fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
-  req.rawBody = body; // Guardamos el texto crudo original
+// Registramos para 'application/json' y variantes que Intuit puede enviar con CloudEvents.
+const jsonParser = (req, body, done) => {
+  req.rawBody = body;
   try {
-    done(null, JSON.parse(body)); // Luego parseamos normalmente
+    done(null, JSON.parse(body));
   } catch (err) {
     done(err);
   }
-});
+};
+fastify.addContentTypeParser('application/json', { parseAs: 'string' }, jsonParser);
+fastify.addContentTypeParser('application/cloudevents+json', { parseAs: 'string' }, jsonParser);
 
 // MIDDLEWARES GLOBALES
 // Ejecutar Trazabilidad en cada petición entrante
