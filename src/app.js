@@ -26,18 +26,12 @@ const jsonParser = (req, body, done) => {
 };
 fastify.addContentTypeParser('application/json', { parseAs: 'string' }, jsonParser);
 fastify.addContentTypeParser('application/cloudevents+json', { parseAs: 'string' }, jsonParser);
+fastify.addContentTypeParser('application/cloudevents-batch+json', { parseAs: 'string' }, jsonParser);
 
 // MIDDLEWARES GLOBALES
 // Ejecutar Trazabilidad en cada petición entrante
 fastify.addHook('onRequest', correlationMiddleware);
 
-// LOG TEMPORAL: capturar content-type de webhooks QB para diagnóstico CloudEvents
-fastify.addHook('onRequest', (request, reply, done) => {
-  if (request.url === '/webhook/quickbooks' && request.method === 'POST') {
-    loggerSource.info('[DEBUG-CT] QB webhook content-type: ' + request.headers['content-type']);
-  }
-  done();
-});
 
 // Loguear cada respuesta HTTP que sale de nuestro servidor
 fastify.addHook('onResponse', (request, reply, done) => {
