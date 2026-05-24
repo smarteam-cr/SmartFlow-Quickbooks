@@ -41,7 +41,12 @@ const validateHubSpotSignature = (request, reply, done) => {
   const signatureBuffer = Buffer.from(signature);
 
   if (expectedBuffer.length !== signatureBuffer.length || !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)) {
-    logger.warn('[Security] Webhook HS rechazado: firma inválida');
+    logger.warn('[Security] Webhook HS rechazado: firma inválida', {
+      hasV3: !!request.headers['x-hubspot-signature-v3'],
+      hasV1: !!request.headers['x-hubspot-signature'],
+      signatureUsed: request.headers['x-hubspot-signature-v3'] ? 'v3' : 'v1',
+      timestamp: timestamp || 'none'
+    });
     return reply.status(401).send({ status: 'error', message: 'Firma inválida' });
   }
 
