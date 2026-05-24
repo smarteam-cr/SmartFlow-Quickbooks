@@ -19,10 +19,11 @@ const validateHubSpotSignature = (request, reply, done) => {
     return reply.status(503).send({ status: 'error', message: 'Servidor mal configurado' });
   }
 
-  const signature = request.headers['x-hubspot-signature-v3'] || request.headers['x-hubspot-signature'];
+  const signatureV3 = request.headers['x-hubspot-signature-v3'];
+  const signatureV1 = request.headers['x-hubspot-signature'];
   const timestamp = request.headers['x-hubspot-request-timestamp'];
 
-  if (!signature) {
+  if (!signatureV3 && !signatureV1) {
     logger.warn('[Security] Webhook HS rechazado: sin firma');
     return reply.status(401).send({ status: 'error', message: 'Firma requerida' });
   }
@@ -34,19 +35,36 @@ const validateHubSpotSignature = (request, reply, done) => {
   }
 
   const rawBody = request.rawBody || JSON.stringify(request.body);
-  const sourceString = config.hubspot.appSecret + rawBody;
-  const expectedHash = crypto.createHash('sha256').update(sourceString).digest('hex');
+  let isValid = false;
 
-  const expectedBuffer = Buffer.from(expectedHash);
-  const signatureBuffer = Buffer.from(signature);
+  if (signatureV3 && timestamp) {
+    // v3: HMAC-SHA256(secret, METHOD + URI + body + timestamp) → base64
+    const uri = `https://${request.headers.host}${request.url}`;
+    const sourceString = `${request.method}${uri}${rawBody}${timestamp}`;
+    const expectedHash = crypto
+      .createHmac('sha256', config.hubspot.appSecret)
+      .update(sourceString)
+      .digest('base64');
 
-  if (expectedBuffer.length !== signatureBuffer.length || !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)) {
-    logger.warn('[Security] Webhook HS rechazado: firma inválida', {
-      hasV3: !!request.headers['x-hubspot-signature-v3'],
-      hasV1: !!request.headers['x-hubspot-signature'],
-      signatureUsed: request.headers['x-hubspot-signature-v3'] ? 'v3' : 'v1',
-      timestamp: timestamp || 'none'
-    });
+    const expectedBuffer = Buffer.from(expectedHash);
+    const signatureBuffer = Buffer.from(signatureV3);
+    isValid = expectedBuffer.length === signatureBuffer.length
+      && crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  } else if (signatureV1) {
+    // v1 fallback: SHA256(secret + body) → hex
+    const expectedHash = crypto
+      .createHash('sha256')
+      .update(config.hubspot.appSecret + rawBody)
+      .digest('hex');
+
+    const expectedBuffer = Buffer.from(expectedHash);
+    const signatureBuffer = Buffer.from(signatureV1);
+    isValid = expectedBuffer.length === signatureBuffer.length
+      && crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  }
+
+  if (!isValid) {
+    logger.warn('[Security] Webhook HS rechazado: firma inválida');
     return reply.status(401).send({ status: 'error', message: 'Firma inválida' });
   }
 
