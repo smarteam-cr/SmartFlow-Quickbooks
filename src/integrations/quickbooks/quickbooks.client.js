@@ -193,6 +193,34 @@ async function findCustomerBySuffix(suffix) {
   }
 }
 
+/**
+ * Busca un Customer-empresa en QB por NIT.
+ * Se usa como dedup primario en el flujo HS->QB de empresas.
+ *
+ * Misma estrategia que findCustomerBySuffix: QB no permite query directo
+ * sobre AlternatePhone, así que hacemos LIKE sobre DisplayName (que incluye
+ * el NIT como sufijo) y filtramos client-side por AlternatePhone exacto.
+ */
+async function findCompanyByNit(nit) {
+  if (!nit) return null;
+  try {
+    const baseUrl = await getBaseResourceUrl();
+    const safeNit = String(nit)
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'")
+      .replace(/[%_]/g, "");
+    const query = `SELECT * FROM Customer WHERE DisplayName LIKE '%${safeNit}%'`;
+    const response = await qbClient.get(`${baseUrl}/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    const candidates = response.data.QueryResponse.Customer || [];
+    const exactMatch = candidates.find(c => c.AlternatePhone?.FreeFormNumber === nit);
+    return exactMatch || null;
+  } catch (error) {
+    const detail = extractAxiosError(error);
+    logger.error(`Error buscando empresa por NIT: ${detail}`);
+    throw new Error(detail);
+  }
+}
+
 async function getAllCustomers() {
   try {
     const baseUrl = await getBaseResourceUrl();
@@ -495,6 +523,7 @@ module.exports = {
   createCustomer,
   findCustomerByDisplayName,
   findCustomerBySuffix,
+  findCompanyByNit,
   getAllCustomers,
   findItemByName,
   createItem,

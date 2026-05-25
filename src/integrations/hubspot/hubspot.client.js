@@ -168,6 +168,29 @@ async function searchCompanyByQbId(qbId) {
   }
 }
 
+async function searchCompanyByNit(nit) {
+  try {
+    const payload = {
+      filterGroups: [{
+        filters: [{
+          propertyName: "nit",
+          operator: "EQ",
+          value: nit.toString(),
+        }],
+      }],
+      properties: ["name", "nit", "id_usuario_quickbooks"],
+    };
+    const response = await hsClient.post("/crm/v3/objects/companies/search", payload);
+    if (response.data.total > 0) {
+      return response.data.results[0];
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error buscando empresa en HubSpot con NIT ${nit}:`, error);
+    throw error;
+  }
+}
+
 async function getAllCompanies() {
   try {
     let allCompanies = [];
@@ -656,6 +679,7 @@ module.exports = {
   createSingleContact,
   associateContactToCompany,
   searchCompanyByQbId,
+  searchCompanyByNit,
   getAllCompanies,
   getAssociatedContactIds,
   getAllContactsWithCompanyAssociations,
