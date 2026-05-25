@@ -114,6 +114,12 @@ async function syncCompanyFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENANT
     const qbCustomer = await quickbooksClient.getCustomerById(qbCustomerId).catch(() => null);
     if (!qbCustomer) return;
 
+    const qbNit = qbCustomer.AlternatePhone?.FreeFormNumber || "";
+    if (!qbNit) {
+        logger.warn(`⚠️ Customer QB ${qbCustomerId} sin AlternatePhone (NIT). Omitiendo sync a HS.`);
+        return;
+    }
+
     const hsProps = normalizeQbCompanyToHs(qbCustomer);
     const newHash = generateHash(hsProps);
     const mapping = await mappingService.findByQbId(tenantId, 'company', qbCustomerId);
@@ -131,8 +137,9 @@ async function syncCompanyFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENANT
             });
         }
     } else {
-        hsCompanyId = await hubspotClient.searchCompanyByQbId(qbCustomerId);
-        if (hsCompanyId) {
+        const existingHs = await hubspotClient.searchCompanyByNit(qbNit);
+        if (existingHs) {
+            hsCompanyId = existingHs.id;
             echoSuppression.markAsCreatedInHs(hsCompanyId);
             await hubspotClient.updateCompany(hsCompanyId, hsProps);
         } else {
