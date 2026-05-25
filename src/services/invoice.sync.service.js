@@ -124,6 +124,14 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       return null;
     }
 
+    // Guard: HS emite hs_balance_due=0 como valor intermedio al agregar items (especialmente 0% tax).
+    // Una factura legítimamente pagada debe tener monto facturado > 0.
+    const amountBilled = Number(hsInvoice.properties.hs_amount_billed || 0);
+    if (amountBilled <= 0) {
+      logger.warn(`🛑 [Regla] Factura ${invoiceId} con monto facturado=0 (balance_due=${balance}). Evento prematuro, ignorando.`);
+      return null;
+    }
+
     const lineItemAssociations = await hubspotClient.getInvoiceAssociations(invoiceId, 'line_items');
     if (lineItemAssociations.length === 0) {
       logger.warn(`🛑 [Regla] Factura ${invoiceId} sin productos. Omitiendo.`);
