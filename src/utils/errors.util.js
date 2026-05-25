@@ -71,6 +71,12 @@ class MissingIdentityError extends SkipJobError {
   }
 }
 
+class MissingNitError extends SkipJobError {
+  constructor(message = 'Empresa sin NIT: no se puede sincronizar con QuickBooks.') {
+    super(message, 'MISSING_NIT');
+  }
+}
+
 class CurrencyMismatchError extends SkipJobError {
   constructor(message = 'Moneda de factura y moneda_de_preferencia del contacto no coinciden.') {
     super(message, 'CURRENCY_MISMATCH');
@@ -88,5 +94,6 @@ module.exports = {
   InactiveCustomerError,
   InactiveParentError,
   MissingIdentityError,
+  MissingNitError,
   CurrencyMismatchError,
 };
