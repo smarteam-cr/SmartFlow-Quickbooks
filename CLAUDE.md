@@ -57,7 +57,10 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 - QB → HS: lookup by EntityMapping → fallback `searchContactByIdentification` (searches by `documento_de_identidad`) → create. If QB `Suffix` is empty, the contact is skipped with a warning.
 - `processContact` returns `{ qbCustomerId, contactInfo, status }`. `contactInfo` is consumed by `mapInvoicePayload` to set `BillAddr` on QB invoices; `status` is consumed by invoice/payment sync for fail-fast on inactive customers.
 - Sub-customers in QB (Job=true or ParentRef) map to HS contacts associated to a company.
-- Companies use `nit` (HS) for dedup — unrelated to the contact identity key above.
+- **Identity key for companies**: `nit` (HS custom property) ↔ `AlternatePhone.FreeFormNumber` (QB field). This field is **mandatory** — companies without it throw `MissingNitError` and the job is marked SKIPPED. Never reaches QB.
+- QB `DisplayName` for companies is built as `"${companyName} ${nit}"` (nit included to enable LIKE-based search, same strategy as contacts with documento_de_identidad).
+- HS → QB: lookup by EntityMapping → fallback `findCompanyByNit` (LIKE on DisplayName + client-side filter on exact AlternatePhone.FreeFormNumber) → create.
+- QB → HS: lookup by EntityMapping → fallback `searchCompanyByNit` (searches by `nit` property in HS) → create. If QB `AlternatePhone` is empty, the company is skipped with a warning.
 - `searchContactByEmail` (HS client) does **not** return `documento_de_identidad`. Use `getContactDetails` if that field is needed.
 
 **Contact status sync** (`estado_del_contacto_qb` HS property ↔ QB `Active` boolean):
