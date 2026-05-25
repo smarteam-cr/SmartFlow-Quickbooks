@@ -5,15 +5,21 @@ const mappingService = require('./mapping.service');
 const echoSuppression = require('../utils/echo.suppression.util');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
+const { MissingNitError } = require('../utils/errors.util');
 
 function normalizeHsCompanyToQb(company) {
     const props = company.properties || {};
+    const nit = props.nit || "";
+    const companyName = props.name || "";
+    const displayName = nit
+        ? `${companyName} ${nit}`.trim()
+        : companyName || props.domain || `Company-${company.id}`;
     return {
-        companyName: props.name || "", nit: props.nit || "", phone: props.phone || "",
+        companyName, nit, phone: props.phone || "",
         domain: props.domain || "", address: props.address || "", city: props.city || "",
         state: props.state || "", zip: props.zip || "", country: props.country || "",
         preferredCurrency: props.moneda_de_preferencia || "",
-        displayName: props.name || props.domain || `Company-${company.id}`
+        displayName
     };
 }
 
@@ -47,6 +53,10 @@ async function processCompany(hsCompanyId, tenantId = DEFAULT_TENANT_ID) {
     const company = await hubspotClient.getCompanyDetails(hsCompanyId);
     if (!company) return null;
 
+    if (!company.properties?.nit) {
+        throw new MissingNitError(`Empresa HS ${hsCompanyId} sin NIT. Se omite el sync con QuickBooks.`);
+    }
+
     const normalizedData = normalizeHsCompanyToQb(company);
     const newHash = generateHash(normalizedData);
     const mapping = await mappingService.findByHsId(tenantId, 'company', hsCompanyId);
@@ -76,7 +86,7 @@ async function processCompany(hsCompanyId, tenantId = DEFAULT_TENANT_ID) {
             qbSyncToken: updated.SyncToken, payloadHash: newHash, sourceSystem: 'HUBSPOT'
         });
     } else {
-        let existingQb = await quickbooksClient.findCustomerByDisplayName(normalizedData.displayName);
+        let existingQb = await quickbooksClient.findCompanyByNit(normalizedData.nit);
         if (!existingQb) {
             existingQb = await quickbooksClient.createCustomer(normalizedData);
             echoSuppression.markAsCreatedInQb(existingQb.Id);
