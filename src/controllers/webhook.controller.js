@@ -136,6 +136,8 @@ async function handleHubSpotWebhook(request, reply) {
       internalEntity = ENTITIES.INVOICE;
 
       // --- ESCUDO PARA FACTURAS (hs_balance_due) ---
+      // Solo reaccionamos al cambio de hs_balance_due (cuando llega a 0).
+      // Cualquier otro evento de factura (creation, otros propertyChange) se ignora.
       if (type === 'object.propertyChange' && event.propertyName === 'hs_balance_due') {
         const balance = Number(event.propertyValue);
         if (isNaN(balance) || balance > 0) {
@@ -143,8 +145,8 @@ async function handleHubSpotWebhook(request, reply) {
           continue;
         }
         event.subscriptionType = 'object.creation'; // Transformación para disparo en QB
-      } else if (type === 'object.creation') {
-        continue; // Bloqueo de seguridad HS
+      } else {
+        continue; // Bloqueo: solo hs_balance_due=0 dispara sync de facturas
       }
     } else if (event.objectTypeId === '0-101') {
       internalEntity = ENTITIES.HS_PAYMENT;
