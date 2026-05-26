@@ -233,7 +233,8 @@ function buildHashForMapping(customer, hsProps, suffix) {
     email: customer.PrimaryEmailAddr?.Address || '',
     phone: hsProps.phone || '',
     hs_whatsapp_phone_number: hsProps.hs_whatsapp_phone_number || '',
-    address: customer.BillAddr?.Line1 || '',
+    address: [customer.BillAddr?.Line1, customer.BillAddr?.Line2, customer.BillAddr?.Line3, customer.BillAddr?.Line4]
+      .filter(Boolean).join(', ') || '',
     city: hsProps.city || '',
     state: hsProps.state || '',
     zip: hsProps.zip || '',
@@ -311,7 +312,8 @@ async function processCustomer(customer) {
     () => hubspotClient.updateContact(hsContactId, {
       id_usuario_quickbooks: qbId,
       documento_de_identidad: suffix,
-      address: customer.BillAddr?.Line1 || '',
+      address: [customer.BillAddr?.Line1, customer.BillAddr?.Line2, customer.BillAddr?.Line3, customer.BillAddr?.Line4]
+        .filter(Boolean).join(', ') || '',
       ...currencyField,
     }),
     `updateContact HS ${hsContactId}`
