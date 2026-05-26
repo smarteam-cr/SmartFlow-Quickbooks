@@ -11,9 +11,79 @@ npm start        # Production start
 
 No test suite or linter is configured. There is no build step — this is a plain Node.js CommonJS project.
 
+## Project Structure
+
+```
+src/
+├── app.js                          # Fastify setup, middleware, route registration
+├── server.js                       # Entry point: DB connect → HTTP start → Worker start
+├── config/
+│   ├── index.js                    # Env validation (fail-fast) + centralized config object
+│   └── constants.js                # Enums: JOB_STATUS, SOURCES, ENTITIES, mapped HS props, system props
+├── controllers/
+│   ├── auth.controller.js          # QuickBooks OAuth flow (connect, callback, status, disconnect)
+│   └── webhook.controller.js       # HubSpot + QuickBooks webhook processing → SyncJob creation
+├── db/
+│   ├── database.js                 # Mongoose connection
+│   └── models/
+│       ├── entity_mapping.model.js # hsId ↔ qbId relationships + payloadHash + syncToken
+│       ├── event_dedup.model.js    # 5-min TTL dedup window for webhook events
+│       ├── job.model.js            # SyncJob queue with status lifecycle + 30-day TTL on completed
+│       ├── oauth_state.model.js    # Anti-CSRF state for OAuth (10-min TTL)
+│       ├── sync_audit.model.js     # Audit trail of all sync operations
+│       └── tenant.model.js         # Multi-tenant config: credentials, preferences, mappings
+├── integrations/
+│   ├── hubspot/
+│   │   └── hubspot.client.js       # HS API client: contacts, companies, products, invoices, payments, associations
+│   └── quickbooks/
+│       ├── quickbooks.client.js    # QB API client: customers, items, invoices, payments + auto-refresh on 401
+│       └── quickbooks.mapper.js    # QB invoice/line-item payload construction
+├── lib/
+│   ├── crypto.lib.js               # AES-256-GCM encrypt/decrypt for tokens at rest
+│   ├── logger.lib.js               # Winston daily-rotate logger with safe Axios error serialization
+│   └── response.lib.js             # Standardized JSON response helpers
+├── middlewares/
+│   ├── api-key.middleware.js        # x-api-key validation (timing-safe compare) for auth endpoints
+│   ├── auth.middleware.js           # HMAC signature validation for HS (v3/v1) and QB webhooks
+│   └── correlation.middleware.js    # x-correlation-id propagation (UUID v4 fallback)
+├── routes/
+│   ├── auth.routes.js               # OAuth + connection management routes
+│   ├── static.routes.js             # Privacy policy + EULA pages (required by Intuit app listing)
+│   └── webhook.routes.js            # Webhook route registration with signature middleware
+├── scripts/
+│   ├── configure-deposit-accounts.js
+│   ├── configure-tax-mappings.js
+│   ├── migrate-qb-contacts.js       # V1: link or create HS contacts from legacy QB customers
+│   ├── seed-tenants.js
+│   └── v2-migrate-contacts-qb.js    # V2: link-only (no HS creation), with built-in retry
+├── services/
+│   ├── auth.service.js              # Token management, OAuth exchange, refresh with concurrency guard
+│   ├── company.sync.service.js
+│   ├── contact.sync.service.js
+│   ├── dedupe.service.js            # SHA256-based event dedup (5-min window)
+│   ├── invoice.sync.service.js
+│   ├── job.service.js               # Job CRUD + dedup at intake + retry scheduling
+│   ├── mapping.service.js           # EntityMapping upsert/lookup
+│   ├── payment.sync.service.js
+│   └── product.sync.service.js
+├── tasks/
+│   └── worker.js                    # V2.0 pull-based motor: concurrent job processing + retry poller
+└── utils/
+    ├── axios.error.util.js          # Extracts readable errors from QB Fault / HS error responses
+    ├── backoff.util.js              # Exponential backoff + retryable error classification
+    ├── date.util.js                 # Timezone-aware date formatting (HS UTC → QB local date)
+    ├── echo.suppression.util.js     # In-memory TTL sets to prevent sync loops
+    ├── errors.util.js               # Custom error hierarchy (AppError, SkipJobError, etc.)
+    └── mutex.util.js                # Promise-based per-key sequential execution
+```
+
+**Root-level files:** `Dockerfile`, `docker-compose.yml`, `.env.example`, `deposit-accounts.example.json`, `tax-mappings.example.json`, `ROADMAP_PRODUCTION.md`.
+
+**Config directory:** `config/deposit-accounts.json`, `config/tax-mappings.json` (active config files used by scripts).
+
 ## Architecture Overview
 
-This is a **bidirectional sync integration** between HubSpot (CRM) and QuickBooks (accounting), built with Fastify + MongoDB. It is **not** a REST API — it exposes only webhook endpoints and processes everything asynchronously via a job queue.
+This is a **bidirectional sync integration** between HubSpot (CRM) and QuickBooks (accounting), built with Fastify + MongoDB. It is **not** a REST API — it exposes only webhook endpoints, OAuth endpoints, and static pages. Everything is processed asynchronously via a job queue.
 
 ### Request Flow
 
@@ -28,11 +98,13 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 ### Key Architectural Decisions
 
-**Job Queue is MongoDB-backed** (`src/db/models/job.model.js`). Jobs persist across restarts. The worker uses `findOneAndUpdate` to atomically claim jobs. A MongoDB Change Stream wakes the worker on new inserts. Orphaned PROCESSING jobs are recovered to COMPLETED on startup.
+**Job Queue is MongoDB-backed** (`src/db/models/job.model.js`). Jobs persist across restarts. The worker (`src/tasks/worker.js`) uses `findOneAndUpdate` to atomically claim jobs. A MongoDB Change Stream wakes the worker on new inserts. Orphaned PROCESSING jobs are recovered to **PENDING** on startup.
 
-**Retry system**: failed jobs go to `RETRY_PENDING`, a 30-second poller picks them up with exponential backoff. Max 3 attempts by default (`MAX_RETRY_ATTEMPTS` env).
+**Worker V2.0 (pull-based motor)**: processes up to `CONCURRENCY` jobs simultaneously. When a slot frees up, `processNextJobs()` recursively checks for more work. The retry poller runs every 30 seconds, promoting `RETRY_PENDING` jobs back to `PENDING` once their `nextRetryAt` has passed.
 
-**SkipJobError** (`src/utils/errors.util.js`): a special error class that signals a business-rule abort, not a failure. The worker catches it and marks the job as **SKIPPED** (not FAILED) so it is not retried. All domain-specific error subclasses extend it: `InactiveCustomerError`, `InactiveParentError`, `MissingIdentityError`, `CurrencyMismatchError`. Throw one of these (or a base `SkipJobError`) when you want to bail out of sync without consuming retries.
+**Retry system**: failed jobs go to `RETRY_PENDING` (if retryable) or `DEAD_LETTER` (if max attempts reached or non-retryable). Retryable errors: 408, 409, 429, 5xx, network errors. Non-retryable: 400, 401, 403, 404, 422. Max 3 attempts by default (`MAX_RETRY_ATTEMPTS` env). Exponential backoff: `2^attempts * 1000ms + jitter`.
+
+**SkipJobError** (`src/utils/errors.util.js`): a special error class that signals a business-rule abort, not a failure. The worker catches it and marks the job as **SKIPPED** (not FAILED) so it is not retried. All domain-specific error subclasses extend it: `InactiveCustomerError`, `InactiveParentError`, `MissingIdentityError`, `MissingNitError`, `CurrencyMismatchError`. Throw one of these (or a base `SkipJobError`) when you want to bail out of sync without consuming retries.
 
 **Echo suppression** (`src/utils/echo.suppression.util.js`): when the sync writes back to HS or QB, it marks those IDs in-memory so the resulting webhook doesn't create a loop. TTLs are asymmetric: 10s for HS marks (HS is near-instant), 30s for QB marks (QB batches).
 
@@ -44,7 +116,11 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 **Hash format mismatch between directions**: HS→QB and QB→HS compute the hash over different JSON structures (different field names — QB-shape vs HS-shape). The first cross-direction event after a write always sees a hash mismatch and triggers an update on the other platform. This is harmless when data is already aligned (the update is a no-op) and echo suppression prevents the resulting webhook from looping back. After that first cross-direction event, the hash stabilizes for its direction.
 
-**Event deduplication** (`src/services/dedupe.service.js`): every incoming webhook event is hashed (sha256 of payload) and stored in `event_dedup` collection. Identical re-deliveries from HS/QB are dropped at the gate before a job is created.
+**Event deduplication** (`src/services/dedupe.service.js`): every incoming webhook event is hashed (sha256 of payload, first 16 chars) and stored in `event_dedup` collection (5-min TTL). Identical re-deliveries from HS/QB are dropped at the gate before a job is created.
+
+**Sync audit trail** (`src/db/models/sync_audit.model.js`): every sync operation records entity, action (created/updated/skipped/suppressed/failed), source/target, description, and duration. Indexed by `(tenantId, createdAt desc)`.
+
+**Timezone-aware dates** (`src/utils/date.util.js`): HubSpot sends UTC timestamps representing "end of day" in the client's timezone. `formatToQbDate` applies the tenant's `utcOffsetMilliseconds` before formatting to `YYYY-MM-DD`, preventing off-by-one date errors.
 
 ### Sync Logic per Entity
 
@@ -61,6 +137,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 - QB `DisplayName` for companies is built as `"${companyName} ${nit}"` (nit included to enable LIKE-based search, same strategy as contacts with documento_de_identidad).
 - HS → QB: lookup by EntityMapping → fallback `findCompanyByNit` (LIKE on DisplayName + client-side filter on exact AlternatePhone.FreeFormNumber) → create.
 - QB → HS: lookup by EntityMapping → fallback `searchCompanyByNit` (searches by `nit` property in HS) → create. If QB `AlternatePhone` is empty, the company is skipped with a warning.
+- **Company domain normalization** (QB→HS): WebAddr URI is stripped of protocol and trailing slash, lowercased.
 - `searchContactByEmail` (HS client) does **not** return `documento_de_identidad`. Use `getContactDetails` if that field is needed.
 
 **Contact status sync** (`estado_del_contacto_qb` HS property ↔ QB `Active` boolean):
@@ -95,7 +172,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 - **Echo suppression**: `processProduct` marks `qbItemId` after create/update and `hsProductId` before writing `id_producto_quickbooks` back to HS.
 
 **Invoices** (`invoice.sync.service.js`):
-- HS → QB: only fires when `hs_balance_due = 0` (the webhook controller transforms this into `object.creation` to dispatch).
+- HS → QB: only fires when `hs_balance_due = 0` AND `hs_amount_billed > 0` (the webhook controller enforces balance=0; the service enforces amount>0 to guard against premature events when adding 0% tax items that briefly set balance to 0 before the invoice is finalized).
 - **Three-layer currency validation** (fail-fast, no QB call if any layer fails):
   1. **HS-vs-HS** (cheap, no APIs): `hsInvoice.hs_currency` must equal `contactInfo.preferredCurrency`.
   2. **HS-vs-QB**: `hsInvoice.hs_currency` must equal `qbCustomer.CurrencyRef.value` (in case a drift fix hadn't run yet).
@@ -105,30 +182,35 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 - **Manual DocNumber generation**: when QB has "Custom Transaction Numbers" enabled, QB does NOT auto-number. We compute the next DocNumber via `computeNextDocNumber({ lastNumber, paddingLength })` which preserves zero-padding (e.g., `"00045"` → `"00046"`). Reads the previous via `quickbooksClient.getLastInvoiceDocNumber()`. The whole create call is wrapped in `runSequentially('invoice-create:${tenantId}', ...)` to prevent two workers from computing the same number simultaneously and one failing with "Duplicate DocNumber".
 - `resolveQbItemIdForLineItem()` tries 3 paths: (1) `id_producto_quickbooks` on the line item (validated for active status), (2) `hs_product_id` → processProduct, (3) name search → create fallback.
 - After creating the QB invoice, `reconcilePaymentsForInvoice()` links any existing unlinked QB payments by `PaymentRefNum`.
-- The mapper inherits QB company preferences (`SalesTermRef`, `PaymentMethodRef`, `BillEmail`) from `getCompanyPreferences()` so invoices match the tenant's QB defaults.
-- After successful create, writes `numero_factura_qb` back to the HS invoice.
+- The mapper inherits QB company preferences (`SalesTermRef`, `PaymentMethodRef`, `BillEmail`) from `getCompanyPreferences()` so invoices match the tenant's QB defaults. Currency is inherited from the QB customer (`CurrencyRef`), not from HS.
+- After successful create, writes `id_factura_quickbooks`, `numero_factura_qb`, and status back to the HS invoice.
 - QB → HS: only on `operation=Emailed`, marks HS invoice as paid.
 
 **Payments** (`payment.sync.service.js`):
-- HS → QB: creates an Unapplied Payment in QB against the resolved customer.
+- HS → QB: creates an Unapplied Payment in QB against the resolved customer (no invoice link at creation).
+- **Required invoice association**: payment MUST be associated to at least 1 invoice in HS. If none, throws `CurrencyMismatchError` with a message to register from invoice details. If multiple, validates all share the same currency.
+- **Multi-layer currency validation** (same approach as invoices):
+  1. Contact's `moneda_de_preferencia` must match invoice currency.
+  2. QB customer's `CurrencyRef` must match.
+  3. All associated invoices must share the same `hs_currency`.
 - **DepositToAccountRef routing**: payments are deposited into the QB account configured for the payment's currency in `tenant.preferences.depositAccounts` (e.g., `{ "USD": "1150040004", "CRC": "1150040003" }`). If no mapping exists for the currency, QB uses the realm's default deposit account and a warning is logged.
-- Currency validation across contact and invoice (similar to invoice flow).
-- Reconciliation between payment and invoice happens inside `syncInvoiceToQuickbooks` after invoice creation.
+- Reconciliation between payment and invoice happens inside `syncInvoiceToQuickbooks` after invoice creation — `reconcilePaymentsForInvoice()` searches by `PaymentRefNum` and calls `linkPaymentToInvoice()`.
+- Payments with amount ≤ 0 are silently skipped.
 
 ### Multi-Tenancy
 
 The system is designed for multiple tenants but currently runs with `DEFAULT_TENANT_ID`. Tenant credentials and preferences are stored in `tenant.model.js` and retrieved dynamically:
-- `hubspot.accessToken`, `hubspot.utcOffsetMilliseconds`, `hubspot.portalId`
-- `quickbooks.accessToken`, `quickbooks.refreshToken`, `quickbooks.realmId` (auto-refreshed via Axios 401 interceptor)
+- `hubspot.accessTokenEncrypted`, `hubspot.utcOffsetMilliseconds`, `hubspot.portalId`
+- `quickbooks.accessTokenEncrypted`, `quickbooks.refreshTokenEncrypted`, `quickbooks.realmId` (auto-refreshed via Axios 401 interceptor with concurrency guard — multiple 401s share a single refresh promise per tenant)
 - `preferences.taxMappings` (HS taxRateGroupId → QB TaxCode ID) — required by invoice sync
 - `preferences.depositAccounts` (currency code → QB Bank Account ID) — used by payment sync
-- `preferences` may also hold company-wide QB defaults discovered at OAuth (SalesTerm, PaymentMethod, BillEmail) — see `quickbooks.auth.service.js`.
+- `preferences` may also hold company-wide QB defaults discovered at OAuth (SalesTerm, PaymentMethod, BillEmail) — see `auth.service.js`.
 
-QB tokens are encrypted at rest with `ENCRYPTION_KEY` (AES-256, 64 hex chars).
+QB tokens are encrypted at rest with `ENCRYPTION_KEY` (AES-256-GCM, 64 hex chars).
 
 ### Error Handling
 
-`src/utils/axios.error.util.js` exports `extractAxiosError(error)` which parses both QB (`Fault.Error[0]`) and HS (`message`/`errors`) error formats into a readable string. All QB client functions use this — never pass a raw Axios error to `logger.error`.
+`src/utils/axios.error.util.js` exports `extractAxiosError(error)` which parses both QB (`Fault.Error[0]`) and HS (`message`/`errors`) error formats into a readable string. Includes Intuit `intuit_tid` header for audit trails. All QB client functions use this — never pass a raw Axios error to `logger.error`.
 
 The logger (`src/lib/logger.lib.js`) has a `safeReplacer` that handles Axios errors and circular references, so `logger.error('msg', error)` is safe but will produce less detail than using `extractAxiosError` explicitly.
 
@@ -137,14 +219,14 @@ The logger (`src/lib/logger.lib.js`) has a `safeReplacer` that handles Axios err
 |---|---|---|
 | `AppError`, `ValidationError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError` | Error / AppError | FAILED (retried) |
 | `SkipJobError` | AppError | **SKIPPED** (no retry) |
-| `InactiveCustomerError`, `InactiveParentError`, `MissingIdentityError`, `CurrencyMismatchError` | SkipJobError | **SKIPPED** (no retry) |
+| `InactiveCustomerError`, `InactiveParentError`, `MissingIdentityError`, `MissingNitError`, `CurrencyMismatchError` | SkipJobError | **SKIPPED** (no retry) |
 
 When adding a new business rule that should abort sync without consuming retries, throw a `SkipJobError` (or a domain-specific subclass).
 
 ### Webhook Endpoints & Routing
 
-- `POST /webhook/hubspot` — HubSpot events (HMAC validated; bypass flag in dev).
-- `POST /webhook/quickbooks` — QuickBooks events (Intuit signature validated; bypass flag in dev).
+- `POST /webhook/hubspot` — HubSpot events (HMAC validated via `x-hubspot-signature-v3` preferred, `v1` fallback; 5-min anti-replay window; bypass in dev/test).
+- `POST /webhook/quickbooks` — QuickBooks events (Intuit signature validated; bypass in dev/test). Supports both **legacy** `eventNotifications` format and **CloudEvents** format (`application/cloudevents+json`, `application/cloudevents-batch+json`) which becomes mandatory after July 2026.
 
 **HubSpot routing** (`webhook.controller.js`):
 - `subscriptionType.startsWith('contact.')` → CONTACT
@@ -154,40 +236,81 @@ When adding a new business rule that should abort sync without consuming retries
 - `objectTypeId === '0-53'` → INVOICE (also has `hs_balance_due` shield: only dispatches when balance ≤ 0; blocks bare `object.creation`)
 - `objectTypeId === '0-101'` → HS_PAYMENT
 
-**QuickBooks routing**: only `Item` and `Customer` entities are processed (mapped to PRODUCT and CONTACT respectively). `Invoice` events are only acted on when `operation='Emailed'`.
+**QuickBooks routing**: `Customer`, `Item`, and `Invoice` entities are processed. `Customer` is mapped to CONTACT or COMPANY (internal entity). `Item` maps to PRODUCT. `Invoice` events are only acted on when `operation='Emailed'`.
+
+### Auth & OAuth Endpoints
+
+All under `/auth/quickbooks/` prefix, managed by `auth.controller.js`:
+
+- `GET /auth/quickbooks/connect` (API key required) — Generates OAuth URL with anti-CSRF `state` (stored in `oauth_state` collection, 10-min TTL). Returns Intuit authorization URL.
+- `GET /auth/quickbooks/callback` (public) — Intuit redirects here after user authorization. Validates `state` (atomic delete = one-time use), exchanges `code` for tokens via `authService.exchangeCodeForTokens()`, stores encrypted tokens in tenant.
+- `GET /auth/quickbooks/status` (API key required) — Returns connection status, token expiration times, environment (sandbox/production).
+- `POST /auth/quickbooks/disconnect` (API key required) — Clears QB tokens from tenant (does not delete tenant).
+- `GET /auth/quickbooks/disconnected` (public) — Landing page displayed when user disconnects from QB's settings UI.
+- `GET /privacy` (public) — Privacy policy page (required by Intuit app listing).
+- `GET /eula` (public) — EULA page (required by Intuit app listing).
+
+### HTTP Middleware Stack
+
+Applied globally via `app.js`:
+1. **Raw body preservation** — Custom JSON parser stores raw body for HMAC signature validation.
+2. **Correlation ID** (`correlation.middleware.js`) — Propagates `x-correlation-id` header or generates UUID v4. Returned in response headers.
+3. **Helmet** — Security headers (CSP disabled).
+4. **CORS** — Configurable via `ALLOWED_ORIGINS`.
+5. **Compression** — gzip/deflate response compression.
+6. **Rate limiting** — 100 requests per minute per IP.
+7. **API key validation** (`api-key.middleware.js`) — Applied to `/auth/quickbooks/connect`, `/status`, `/disconnect`. Uses `crypto.timingSafeEqual` to prevent timing attacks.
+8. **Webhook signature validation** (`auth.middleware.js`) — Applied per webhook route. Bypassed in `development` and `test` environments.
 
 ### Logs
 
-Winston writes to `logs/app-YYYY-MM-DD.log` (all levels) and `logs/error-YYYY-MM-DD.log` (errors only), JSON format, 14/30-day retention. Console output is human-readable and only active when `NODE_ENV !== 'production'`.
+Winston writes to `logs/app-YYYY-MM-DD.log` (all levels, 14-day retention, 20MB max per file) and `logs/error-YYYY-MM-DD.log` (errors only, 30-day retention), JSON format. Exception and rejection handlers have 30-day retention. Console transport is always active (critical for container environments where stdout is the log source).
 
 ### Environment Variables
 
-Required: `MONGODB_URI`, `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_APP_SECRET`, `QB_SANDBOX_BASE_URL`, `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, `QB_WEBHOOK_VERIFIER_TOKEN`, `QB_REDIRECT_URI`, `ENCRYPTION_KEY` (64 hex chars for AES-256), `DEFAULT_TENANT_ID`.
+**Always required** (fail-fast on startup): `MONGODB_URI`, `HUBSPOT_ACCESS_TOKEN`, `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, `ENCRYPTION_KEY` (64 hex chars for AES-256), `INTERNAL_API_KEY`.
 
-Optional: `PORT`, `NODE_ENV`, `LOG_LEVEL`, `WORKER_CONCURRENCY` (default 3), `MAX_RETRY_ATTEMPTS`, `INTERNAL_API_KEY`, `ALLOWED_ORIGINS`.
+**Required in production only**: `HUBSPOT_APP_SECRET`, `QB_WEBHOOK_VERIFIER_TOKEN`. In dev/test environments, webhook signature validation is bypassed.
 
-QB tokens (`QB_TEST_ACCESS_TOKEN`, `QB_REALM_ID`) are stored per-tenant in MongoDB and refreshed at runtime — the env vars are only used for initial seeding.
+**Optional**: `PORT` (default 3001), `NODE_ENV` (default development), `LOG_LEVEL` (default info), `WORKER_CONCURRENCY` (default 3), `MAX_RETRY_ATTEMPTS` (default 3), `ALLOWED_ORIGINS`, `QB_SANDBOX_BASE_URL`, `QB_REDIRECT_URI`.
+
+**Initial seeding only** (read from env but stored per-tenant in MongoDB after OAuth): `QB_TEST_ACCESS_TOKEN`, `QB_REALM_ID`.
+
+### Docker
+
+The project includes a `Dockerfile` and `docker-compose.yml` for containerized deployment.
+
+### Constants Reference
+
+`src/config/constants.js` defines:
+- **Job statuses**: `pending`, `processing`, `completed`, `failed`, `retry_pending`, `suppressed`, `skipped`, `dead_letter`.
+- **Sources**: `HUBSPOT`, `QUICKBOOKS`, `INTERNAL`.
+- **Entities**: `contact`, `company`, `product`, `invoice`, `payment`, `line_item`, `hs_payment`.
+- **Contact status property**: `estado_del_contacto_qb` with values `active`/`inactive`.
+- **`MAPPED_HS_PROPS`**: properties per entity that trigger sync on change (contact: 11 props, company: 9 props, product: 7 props).
+- **`HS_SYSTEM_PROPS`**: properties written by the sync itself, ignored in webhooks to suppress echoes (11 props including `id_usuario_quickbooks`, `id_producto_quickbooks`, `numero_factura_qb`, etc.).
 
 ## Scripts
 
 All scripts live in `src/scripts/` and are run via `node src/scripts/<name>.js [flags]`.
 
 ### `seed-tenants.js`
-One-shot tenant bootstrap. Fetches HS account info via the configured token, creates/upserts the tenant document with HubSpot metadata (portalId, UTC offset). QB credentials are populated separately via the OAuth flow (auth controller hits `/auth/qb/callback`). Run once per new tenant.
+One-shot tenant bootstrap. Fetches HS account info via the configured token, creates/upserts the tenant document with HubSpot metadata (portalId, UTC offset). QB credentials are populated separately via the OAuth flow (`GET /auth/quickbooks/connect` → callback). Run once per new tenant.
 
 ### `configure-tax-mappings.js`
-Configures `tenant.preferences.taxMappings` (HS `hs_tax_rate_group_id` → QB `TaxCode.Id`). **Required before invoices can sync** — invoice sync throws if not configured.
+Configures `tenant.preferences.taxMappings` (HS `hs_tax_rate_group_id` → QB `TaxCode.Id`). **Required before invoices can sync** — invoice sync throws if not configured. Shows diff of current vs. desired state and prompts for confirmation before applying.
 ```bash
 node src/scripts/configure-tax-mappings.js --file=tax-mappings.json [--tenant=<tenantId>]
 ```
 JSON format: `{ "<hsTaxRateGroupId>": "<qbTaxCodeId>", ... }`.
 
 ### `configure-deposit-accounts.js`
-Configures `tenant.preferences.depositAccounts` (ISO currency code → QB Bank `Account.Id`). Used by payment sync to route payments to the correct bank account by currency. If unset, QB falls back to the realm's default deposit account.
+Configures `tenant.preferences.depositAccounts` (ISO currency code → QB Bank `Account.Id`). Used by payment sync to route payments to the correct bank account by currency. If unset, QB falls back to the realm's default deposit account. Shows diff and prompts for confirmation.
 ```bash
-node src/scripts/configure-deposit-accounts.js --file=deposit-accounts.sandbox.json [--tenant=<tenantId>]
+node src/scripts/configure-deposit-accounts.js --file=deposit-accounts.json [--tenant=<tenantId>]
 ```
 JSON format: `{ "USD": "<qbAccountId>", "CRC": "<qbAccountId>", ... }`.
+Validation: currency codes must be exactly 3 uppercase letters; account IDs must be non-empty strings.
 
 ### `migrate-qb-contacts.js`
 One-shot script that migrates **legacy QB customers** that have `CompanyName` set but no `GivenName`/`FamilyName` (and no `Suffix`). These customers are misclassified as companies by the sync system (`isPerson` check fails) and must be restructured before normal sync can recognize them as contacts.
@@ -212,6 +335,20 @@ node src/scripts/migrate-qb-contacts.js                  # full run
 3. Backup `entitymappings` collection in MongoDB.
 4. Re-enable webhooks after script completes. The script is idempotent — already-mapped customers are skipped.
 
+**Output**: generates JSON report + CSV of skipped/failed records in `./migration-reports/`. Throttles at 500ms per customer.
+
+### `v2-migrate-contacts-qb.js`
+V2 variant of the migration script. Key difference: if a QB customer's email is **not found** in HubSpot, it is **skipped** (no HS contact creation). V1 creates a new HS contact; V2 only links existing ones.
+
+Includes built-in retry logic (`withRetry`) for 429/5xx/network errors with exponential backoff. Same flags as V1:
+```bash
+node src/scripts/v2-migrate-contacts-qb.js --dry-run
+node src/scripts/v2-migrate-contacts-qb.js --limit=5
+node src/scripts/v2-migrate-contacts-qb.js
+```
+
+Output in `./migration-reports/v2-migration-{timestamp}.json` and `.csv`. Additional report section: `skippedNotInHs[]`.
+
 ## Production Setup Checklist
 
 When promoting a tenant to production with a new client, run in this order:
@@ -219,16 +356,16 @@ When promoting a tenant to production with a new client, run in this order:
 ```bash
 # 1. Bootstrap tenant + run OAuth flow to populate QB tokens
 node src/scripts/seed-tenants.js
-# (then visit the OAuth start URL exposed by the auth controller to authorize QB)
+# (then visit GET /auth/quickbooks/connect?tenantId=... to start OAuth)
 
 # 2. Configure tax mappings (required for invoice sync)
-node src/scripts/configure-tax-mappings.js --file=tax-mappings.json
+node src/scripts/configure-tax-mappings.js --file=config/tax-mappings.json
 
 # 3. Configure deposit accounts (recommended for multi-currency payment routing)
-node src/scripts/configure-deposit-accounts.js --file=deposit-accounts.sandbox.json
+node src/scripts/configure-deposit-accounts.js --file=config/deposit-accounts.json
 ```
 
-Sample JSON files (`tax-mappings.json`, `deposit-accounts.sandbox.json`) live at the project root. **Both contain real IDs that must come from the client's QB realm** — do not reuse sandbox IDs in production. Re-run either script whenever the client adds a new tax rate / currency / bank account that needs to be wired up.
+Example JSON files live in `config/` and at the project root (`deposit-accounts.example.json`, `tax-mappings.example.json`). **Both contain real IDs that must come from the client's QB realm** — do not reuse sandbox IDs in production. Re-run either script whenever the client adds a new tax rate / currency / bank account that needs to be wired up.
 
 After all three steps complete, enable the HubSpot and QuickBooks webhook subscriptions pointing at:
 - `POST /webhook/hubspot`

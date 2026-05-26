@@ -1,17 +1,24 @@
 #!/usr/bin/env node
 /**
- * Migración V2 QB → HS — solo enlace, sin creación de contactos.
+ * Migración V2 QB → HS — enlace bidireccional, priorizando datos de HS.
  *
- * Misma lógica que migrate-qb-contacts.js pero con una diferencia clave:
- * si el email del QB customer NO existe en HubSpot, se SKIPEA en lugar de
- * crear un contacto nuevo. Esto garantiza cero contactos fantasma en HS.
+ * Si el email del QB customer NO existe en HubSpot, se SKIPEA (sin creación).
  *
  * Flujo por customer elegible:
  *   1. Validaciones de elegibilidad (CompanyName, email, Notes).
  *   2. Si ya tiene EntityMapping → skip (already_mapped).
  *   3. Busca email en HS:
- *      - Encontrado → enlaza (actualiza HS + reestructura QB + crea mapping).
  *      - No encontrado → skip (not_found_in_hs), QB no se toca.
+ *      - Encontrado → enlace bidireccional:
+ *        a) QB → HS: id_usuario_quickbooks, documento_de_identidad (Notes),
+ *           address (BillAddr.Line1), moneda_de_preferencia (CurrencyRef).
+ *        b) HS → QB: GivenName, FamilyName, Suffix, CompanyName='',
+ *           DisplayName, PrimaryPhone, Mobile, BillAddr (city/state/zip/country).
+ *        c) Crea EntityMapping con hash del estado final.
+ *
+ * Monedas no soportadas en HS (fuera de USD/CRC): se migra el contacto
+ * pero se omite moneda_de_preferencia. El reporte indica que debe crearse
+ * la opción en el dropdown de HS y asignarse al contacto.
  *
  * Uso:
  *   node src/scripts/v2-migrate-contacts-qb.js [--limit=N] [--dry-run]
@@ -39,7 +46,7 @@ const LIMIT = (() => {
   return a ? parseInt(a.split('=')[1], 10) : null;
 })();
 const DRY_RUN = args.includes('--dry-run');
-const THROTTLE_MS = 500;
+const THROTTLE_MS = 750;
 
 const SUPPORTED_HS_CURRENCIES = new Set(['USD', 'CRC']);
 const RETRY_MAX = 3;
@@ -102,7 +109,7 @@ function generateCsv(report) {
     rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), csvField(r.notes), 'no_existe_en_hs'].join(';'));
   }
   for (const r of report.unsupportedCurrency) {
-    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`moneda_no_soportada:${r.qbCurrency}`)].join(';'));
+    rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`migrado_moneda_pendiente:${r.qbCurrency}`)].join(';'));
   }
   for (const r of report.failed) {
     rows.push([csvField(r.qbId), csvField(r.companyName), csvField(r.email), '', csvField(`error: ${r.error || ''}`)].join(';'));
@@ -138,21 +145,54 @@ async function fetchAllQbCustomers() {
   return all;
 }
 
-async function updateQbForMigration(customer, givenName, suffix) {
+/**
+ * Actualiza el customer en QB con datos de HS + reestructuración legacy.
+ * @param {object} customer - Customer original de QB (para Id/SyncToken)
+ * @param {object} hsData - Datos leídos de HS para escribir en QB
+ * @param {string} hsData.givenName - firstname de HS
+ * @param {string} hsData.familyName - lastname de HS
+ * @param {string} hsData.suffix - documento_de_identidad (de QB Notes)
+ * @param {string} hsData.phone - phone de HS
+ * @param {string} hsData.mobile - hs_whatsapp_phone_number de HS
+ * @param {string} hsData.city - city de HS
+ * @param {string} hsData.state - state de HS
+ * @param {string} hsData.zip - zip de HS
+ * @param {string} hsData.country - country de HS
+ */
+async function updateQbForMigration(customer, hsData) {
   const { qbClient } = quickbooksClient;
   const { realmId } = await authService.getQuickBooksConfig(tenantId);
-  const displayName = `${givenName} ${suffix}`.trim();
+
+  // DisplayName: mismo formato que la integración normal (contact.sync.service.js:32-33)
+  let displayName = `${hsData.givenName} ${hsData.familyName}`.trim();
+  if (hsData.suffix) displayName = displayName ? `${displayName} ${hsData.suffix}` : hsData.suffix;
 
   const payload = {
     Id: String(customer.Id),
     SyncToken: String(customer.SyncToken),
     sparse: true,
-    GivenName: givenName,
-    FamilyName: '',
-    Suffix: suffix,
+    GivenName: hsData.givenName,
+    FamilyName: hsData.familyName,
+    Suffix: hsData.suffix.substring(0, 16),
     CompanyName: '',
-    DisplayName: displayName
+    DisplayName: displayName,
   };
+
+  if (hsData.phone) payload.PrimaryPhone = { FreeFormNumber: hsData.phone };
+  if (hsData.mobile) payload.Mobile = { FreeFormNumber: hsData.mobile };
+
+  // BillAddr: Line1 se preserva de QB (es el que se envió a HS).
+  // city/state/zip/country vienen de HS.
+  const qbAddr = customer.BillAddr || {};
+  const hasAddrFields = qbAddr.Line1 || hsData.city || hsData.state || hsData.zip || hsData.country;
+  if (hasAddrFields) {
+    payload.BillAddr = {};
+    if (qbAddr.Line1) payload.BillAddr.Line1 = qbAddr.Line1;
+    if (hsData.city) payload.BillAddr.City = hsData.city;
+    if (hsData.state) payload.BillAddr.CountrySubDivisionCode = hsData.state;
+    if (hsData.zip) payload.BillAddr.PostalCode = hsData.zip;
+    if (hsData.country) payload.BillAddr.Country = hsData.country;
+  }
 
   try {
     const response = await qbClient.post(`/${realmId}/customer?minorversion=65`, payload);
@@ -171,34 +211,40 @@ function resolveQbCurrencyForHs(customer) {
 }
 
 /**
- * Debe coincidir EXACTAMENTE con el hash de syncCustomerFromQuickbooks
- * (contact.sync.service.js ~línea 297-308) para que el primer webhook
- * post-migración haga hash-match y no dispare un update innecesario.
+ * Debe coincidir EXACTAMENTE con el hash que syncCustomerFromQuickbooks
+ * (contact.sync.service.js ~línea 297-308) computaría al leer el QB customer
+ * POST-migración. Después de la migración, QB tiene datos de HS (firstname,
+ * lastname, phone, mobile, city, state, zip, country) y datos originales de QB
+ * (email, address/Line1, CurrencyRef, Active, ParentRef).
  *
- * Campos críticos que difieren del V1:
- *   - estado_del_contacto_qb: incluido (el sync normal lo incluye)
- *   - moneda_de_preferencia: usa CurrencyRef.value raw, NO el filtrado por
- *     SUPPORTED_HS_CURRENCIES (el sync normal usa el valor directo de QB)
+ * El hash se basa en los valores que QB TENDRÁ después del update, mapeados
+ * al formato HS (que es lo que el sync normal usa para computar el hash).
+ *
+ * @param {object} customer - Customer original de QB (pre-migración)
+ * @param {object} hsProps - Properties leídas de HS
+ * @param {string} suffix - documento_de_identidad (Notes de QB)
  */
-function buildHashForMapping(customer, givenName, suffix) {
-  const hsProps = {
-    firstname: givenName,
-    lastname: '',
+function buildHashForMapping(customer, hsProps, suffix) {
+  // Estos son los campos tal como QB los tendrá post-update,
+  // expresados en formato HS (que es el que usa el hash QB→HS).
+  const hashPayload = {
+    firstname: hsProps.firstname || '',
+    lastname: hsProps.lastname || '',
     email: customer.PrimaryEmailAddr?.Address || '',
-    phone: customer.PrimaryPhone?.FreeFormNumber || '',
-    hs_whatsapp_phone_number: customer.Mobile?.FreeFormNumber || '',
+    phone: hsProps.phone || '',
+    hs_whatsapp_phone_number: hsProps.hs_whatsapp_phone_number || '',
     address: customer.BillAddr?.Line1 || '',
-    city: customer.BillAddr?.City || '',
-    state: customer.BillAddr?.CountrySubDivisionCode || '',
-    zip: customer.BillAddr?.PostalCode || '',
-    country: customer.BillAddr?.Country || '',
+    city: hsProps.city || '',
+    state: hsProps.state || '',
+    zip: hsProps.zip || '',
+    country: hsProps.country || '',
     documento_de_identidad: suffix,
     moneda_de_preferencia: customer.CurrencyRef?.value || '',
     [CONTACT_STATUS_PROPERTY]: customer.Active === false
       ? CONTACT_STATUS_VALUES.INACTIVE
       : CONTACT_STATUS_VALUES.ACTIVE,
   };
-  return md5({ ...hsProps, _parentRef: customer.ParentRef?.value || null });
+  return md5({ ...hashPayload, _parentRef: customer.ParentRef?.value || null });
 }
 
 async function processCustomer(customer) {
@@ -242,44 +288,59 @@ async function processCustomer(customer) {
     };
   }
 
-  // ── Existe en HS → enlazar ──
-  if (!currency.supported) {
-    console.warn(`     ⚠️  QB ${qbId} tiene CurrencyRef="${currency.raw}" no soportada por HS (solo USD/CRC). Se omite moneda_de_preferencia.`);
-  }
-
-  const currencyField = currency.value ? { moneda_de_preferencia: currency.value } : {};
+  // ── Existe en HS → enlace bidireccional ──
   const hsContactId = hsContact.id;
 
-  // Actualizar HS: setear id_usuario_quickbooks + campos del customer QB
-  await withRetry(
-    () => hubspotClient.updateContactProperty(hsContactId, qbId),
-    `updateProp HS ${hsContactId}`
+  // Paso 1: Leer datos completos del contacto en HS
+  const hsDetails = await withRetry(
+    () => hubspotClient.getContactDetails(hsContactId),
+    `getDetails HS ${hsContactId}`
   );
+  if (!hsDetails) {
+    throw new Error(`Contacto HS ${hsContactId} no encontrado al leer detalles (404)`);
+  }
+  const hsProps = hsDetails.properties || {};
+
+  // Paso 2: QB → HS (id_usuario_quickbooks, documento_de_identidad, address, moneda)
+  if (!currency.supported) {
+    console.warn(`     ⚠️  QB ${qbId} tiene CurrencyRef="${currency.raw}" no soportada por HS (solo ${[...SUPPORTED_HS_CURRENCIES].join('/')}). Se omite moneda_de_preferencia.`);
+  }
+  const currencyField = currency.value ? { moneda_de_preferencia: currency.value } : {};
+
   await withRetry(
     () => hubspotClient.updateContact(hsContactId, {
-      firstname: companyName,
-      lastname: '',
+      id_usuario_quickbooks: qbId,
       documento_de_identidad: suffix,
-      phone: customer.PrimaryPhone?.FreeFormNumber || '',
-      hs_whatsapp_phone_number: customer.Mobile?.FreeFormNumber || '',
       address: customer.BillAddr?.Line1 || '',
-      city: customer.BillAddr?.City || '',
-      state: customer.BillAddr?.CountrySubDivisionCode || '',
-      zip: customer.BillAddr?.PostalCode || '',
-      country: customer.BillAddr?.Country || '',
       ...currencyField,
     }),
     `updateContact HS ${hsContactId}`
   );
 
-  // Reestructurar QB: CompanyName → GivenName, Notes → Suffix
+  // Paso 3: HS → QB (firstname, lastname, phone, whatsapp, city, state, zip, country + reestructuración)
+  const hsFirstname = hsProps.firstname || companyName;
+  const hsLastname = hsProps.lastname || '';
+
   const updatedQb = await withRetry(
-    () => updateQbForMigration(customer, companyName, suffix),
+    () => updateQbForMigration(customer, {
+      givenName: hsFirstname,
+      familyName: hsLastname,
+      suffix,
+      phone: hsProps.phone || '',
+      mobile: hsProps.hs_whatsapp_phone_number || '',
+      city: hsProps.city || '',
+      state: hsProps.state || '',
+      zip: hsProps.zip || '',
+      country: hsProps.country || '',
+    }),
     `updateQB ${qbId}`
   );
 
-  // Crear EntityMapping con hash post-migración
-  const payloadHash = buildHashForMapping(customer, companyName, suffix);
+  // Paso 4: Crear EntityMapping con hash del estado final
+  // Usar los valores finales reales (con fallback aplicado) para que el hash
+  // coincida con lo que QB tendrá post-update.
+  const finalHsProps = { ...hsProps, firstname: hsFirstname, lastname: hsLastname };
+  const payloadHash = buildHashForMapping(customer, finalHsProps, suffix);
   await mappingService.upsertMapping({
     tenantId,
     entityType: 'contact',
@@ -292,6 +353,7 @@ async function processCustomer(customer) {
 
   return {
     qbId, email, companyName, hsContactId,
+    hsFirstname, hsLastname,
     qbCurrency: currency.raw,
     currencySupported: currency.supported,
     status: 'linked_existing'
@@ -300,7 +362,7 @@ async function processCustomer(customer) {
 
 async function run() {
   console.log('============================================================');
-  console.log('  Migración V2 QB → HS (solo enlace, sin creación)');
+  console.log('  Migración V2 QB ↔ HS (enlace bidireccional, prioridad HS)');
   console.log(`  Modo:    ${DRY_RUN ? 'DRY-RUN (simulación, sin cambios)' : 'EJECUCIÓN REAL'}`);
   console.log(`  Límite:  ${LIMIT ?? 'sin límite'}`);
   console.log(`  Tenant:  ${tenantId}`);
@@ -451,7 +513,7 @@ async function run() {
   console.log(`  ⚠️  Sin notes (skip):           ${report.skippedNoNotes.length}`);
   console.log(`  ⚠️  Notes inválido (skip):      ${report.skippedInvalidNotes.length}`);
   console.log(`  ⚠️  Notes duplicado (skip):     ${report.skippedDuplicateNotes.length}`);
-  console.log(`  ⚠️  Moneda no soportada:        ${report.unsupportedCurrency.length}`);
+  console.log(`  ⚠️  Moneda pendiente (migrados): ${report.unsupportedCurrency.length}`);
   console.log(`  ❌ Fallidos:                   ${report.failed.length}`);
   console.log('============================================================\n');
 
