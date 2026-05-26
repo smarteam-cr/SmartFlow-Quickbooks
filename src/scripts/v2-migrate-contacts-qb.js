@@ -181,13 +181,18 @@ async function updateQbForMigration(customer, hsData) {
   if (hsData.phone) payload.PrimaryPhone = { FreeFormNumber: hsData.phone };
   if (hsData.mobile) payload.Mobile = { FreeFormNumber: hsData.mobile };
 
-  // BillAddr: Line1 se preserva de QB (es el que se envió a HS).
-  // city/state/zip/country vienen de HS.
+  // BillAddr: concatenar Line1-Line4 en Line1 y limpiar Line2-4 para que
+  // el sync normal (que solo lee Line1) no pierda información.
   const qbAddr = customer.BillAddr || {};
-  const hasAddrFields = qbAddr.Line1 || hsData.city || hsData.state || hsData.zip || hsData.country;
+  const concatenatedAddr = [qbAddr.Line1, qbAddr.Line2, qbAddr.Line3, qbAddr.Line4]
+    .filter(Boolean).join(', ');
+  const hasAddrFields = concatenatedAddr || hsData.city || hsData.state || hsData.zip || hsData.country;
   if (hasAddrFields) {
     payload.BillAddr = {};
-    if (qbAddr.Line1) payload.BillAddr.Line1 = qbAddr.Line1;
+    if (concatenatedAddr) payload.BillAddr.Line1 = concatenatedAddr;
+    payload.BillAddr.Line2 = '';
+    payload.BillAddr.Line3 = '';
+    payload.BillAddr.Line4 = '';
     if (hsData.city) payload.BillAddr.City = hsData.city;
     if (hsData.state) payload.BillAddr.CountrySubDivisionCode = hsData.state;
     if (hsData.zip) payload.BillAddr.PostalCode = hsData.zip;
