@@ -34,10 +34,10 @@ const mapInvoicePayload = (hsInvoice, qbCustomerId, qbInvoiceLines, contactInfo,
     GlobalTaxCalculation: "TaxExcluded",
     Line: qbInvoiceLines,
     TxnDate: formatToQbDate(hsInvoice.properties.hs_invoice_date, utcOffsetMs),
-    DueDate: formatToQbDate(hsInvoice.properties.hs_due_date, utcOffsetMs),
-    CustomerMemo: {
-      value: hsInvoice.properties.hs_title || `Factura exportada desde HubSpot`
-    }
+    DueDate: formatToQbDate(hsInvoice.properties.hs_due_date, utcOffsetMs)
+    // CustomerMemo (el "Mensaje mostrado en la factura" de QB) NO se toca.
+    // QuickBooks es dueño de ese campo: no enviamos nada desde HubSpot para no
+    // pisar lo que el usuario gestione directamente en QB.
   };
 
   if (contactInfo) {
