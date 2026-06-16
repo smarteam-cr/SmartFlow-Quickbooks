@@ -24,7 +24,8 @@ const tenantSchema = new mongoose.Schema({
   
   // Preferencias operativas del tenant
   preferences: {
-    // Mapeo entre internal values del dropdown de tax en HS (hs_tax_rate_group_id)
+    // VESTIGIAL (2026-06-16): ya no se consume en runtime — invoice sync dejó de validar tax por línea.
+    // Se conserva el campo por compatibilidad. Mapeo internal values del dropdown de tax en HS (hs_tax_rate_group_id)
     // y los TaxCode IDs de QB. Se configura vía src/scripts/configure-tax-mappings.js.
     taxMappings: { type: Map, of: String },
     // Mapeo de código ISO de moneda → QB Account Id donde deben caer los pagos

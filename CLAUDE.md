@@ -173,11 +173,11 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 **Invoices** (`invoice.sync.service.js`):
 - HS → QB: only fires when `hs_balance_due = 0` AND `hs_amount_billed > 0` (the webhook controller enforces balance=0; the service enforces amount>0 to guard against premature events when adding 0% tax items that briefly set balance to 0 before the invoice is finalized).
-- **Three-layer currency validation** (fail-fast, no QB call if any layer fails):
+- **Two-layer currency validation** (fail-fast, no QB call if any layer fails):
   1. **HS-vs-HS** (cheap, no APIs): `hsInvoice.hs_currency` must equal `contactInfo.preferredCurrency`.
   2. **HS-vs-QB**: `hsInvoice.hs_currency` must equal `qbCustomer.CurrencyRef.value` (in case a drift fix hadn't run yet).
-  3. **Per-line tax compatibility**: each line item's `hs_tax_rate_group_id` must map (via `tenant.preferences.taxMappings`) to the QB TaxCode that the QB item already has.
-  All three throw `CurrencyMismatchError` (or a tax-specific message) with actionable text so the user knows how to fix the data. Job marked SKIPPED.
+  Both throw `CurrencyMismatchError` with actionable text so the user knows how to fix the data. Job marked SKIPPED.
+- **Per-line tax**: each invoice line inherits the QB product's `SalesTaxCodeRef` as its `TaxCodeRef` (via `mapLineItemToQb`), and the document uses `GlobalTaxCalculation=TaxExcluded`, so QB adds tax on top per that code. The HS line property `hs_tax_rate_group_id` is **no longer validated nor used** — the former `validateLineTax` check was removed. **Operational precondition:** every QB product must use a 0% sales tax code so QB adds nothing and HS/QB totals match. There is no code enforcement of the 0% rate; the only surviving guard requires the QB item to have *some* `SalesTaxCodeRef`.
 - **Inactive customer fail-fast**: throws `InactiveCustomerError` before hitting QB.
 - **Manual DocNumber generation**: when QB has "Custom Transaction Numbers" enabled, QB does NOT auto-number. We compute the next DocNumber via `computeNextDocNumber({ lastNumber, paddingLength })` which preserves zero-padding (e.g., `"00045"` → `"00046"`). Reads the previous via `quickbooksClient.getLastInvoiceDocNumber()`. The whole create call is wrapped in `runSequentially('invoice-create:${tenantId}', ...)` to prevent two workers from computing the same number simultaneously and one failing with "Duplicate DocNumber".
 - `resolveQbItemIdForLineItem()` tries 3 paths: (1) `id_producto_quickbooks` on the line item (validated for active status), (2) `hs_product_id` → processProduct, (3) name search → create fallback.
@@ -202,7 +202,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 The system is designed for multiple tenants but currently runs with `DEFAULT_TENANT_ID`. Tenant credentials and preferences are stored in `tenant.model.js` and retrieved dynamically:
 - `hubspot.accessTokenEncrypted`, `hubspot.utcOffsetMilliseconds`, `hubspot.portalId`
 - `quickbooks.accessTokenEncrypted`, `quickbooks.refreshTokenEncrypted`, `quickbooks.realmId` (auto-refreshed via Axios 401 interceptor with concurrency guard — multiple 401s share a single refresh promise per tenant)
-- `preferences.taxMappings` (HS taxRateGroupId → QB TaxCode ID) — required by invoice sync
+- `preferences.taxMappings` (HS taxRateGroupId → QB TaxCode ID) — **vestigial** (no longer read by invoice sync as of 2026-06-16)
 - `preferences.depositAccounts` (currency code → QB Bank Account ID) — used by payment sync
 - `preferences` may also hold company-wide QB defaults discovered at OAuth (SalesTerm, PaymentMethod, BillEmail) — see `auth.service.js`.
 
@@ -298,7 +298,7 @@ All scripts live in `src/scripts/` and are run via `node src/scripts/<name>.js [
 One-shot tenant bootstrap. Fetches HS account info via the configured token, creates/upserts the tenant document with HubSpot metadata (portalId, UTC offset). QB credentials are populated separately via the OAuth flow (`GET /auth/quickbooks/connect` → callback). Run once per new tenant.
 
 ### `configure-tax-mappings.js`
-Configures `tenant.preferences.taxMappings` (HS `hs_tax_rate_group_id` → QB `TaxCode.Id`). **Required before invoices can sync** — invoice sync throws if not configured. Shows diff of current vs. desired state and prompts for confirmation before applying.
+Configures `tenant.preferences.taxMappings` (HS `hs_tax_rate_group_id` → QB `TaxCode.Id`). **Vestigial:** as of 2026-06-16 invoice sync no longer reads `taxMappings` (the per-line tax validation was removed). This script and the field are kept but no longer affect invoice tax behavior. Shows diff of current vs. desired state and prompts for confirmation before applying.
 ```bash
 node src/scripts/configure-tax-mappings.js --file=tax-mappings.json [--tenant=<tenantId>]
 ```

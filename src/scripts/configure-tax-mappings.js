@@ -1,3 +1,5 @@
+// NOTA (2026-06-16): VESTIGIAL — invoice sync ya no lee taxMappings. Este script se conserva
+// pero no afecta el cálculo de tax de las facturas.
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');

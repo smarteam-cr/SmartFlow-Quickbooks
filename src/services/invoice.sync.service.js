@@ -29,7 +29,7 @@ function computeNextDocNumber({ lastNumber, paddingLength }) {
  *   2. Si tiene `hs_product_id` → delegar al servicio de productos
  *   3. Fallback → buscar el item en QB por nombre
  * Siempre se termina con un `getItemById` para extraer SalesTaxCodeRef,
- * que se usa luego para la validación estricta de tax.
+ * que se usa como TaxCodeRef de la línea en QB (la línea hereda el tax del producto).
  */
 async function resolveQbItemIdForLineItem(item, tenantId) {
   const props = item.properties || {};
@@ -64,7 +64,7 @@ async function resolveQbItemIdForLineItem(item, tenantId) {
     throw new Error(`Producto "${itemName}" no encontrado en QuickBooks. Créalo en QB y vuelve a intentarlo.`);
   }
 
-  // Obtener SalesTaxCodeRef del item para validación de tax
+  // Obtener SalesTaxCodeRef del item: se usa como TaxCodeRef de la línea en QB
   const qbItem = await quickbooksClient.getItemById(qbItemId);
   const qbSalesTaxCodeId = qbItem?.SalesTaxCodeRef?.value;
   if (!qbSalesTaxCodeId) {
@@ -72,31 +72,6 @@ async function resolveQbItemIdForLineItem(item, tenantId) {
   }
 
   return { qbItemId, qbSalesTaxCodeId };
-}
-
-/**
- * Valida que el tax seleccionado en la línea de HS coincida con el tax
- * del item en QB, usando taxMappings del tenant como tabla de traducción.
- * Lanza Error con detalle si hay discrepancia — aborta la creación de la factura.
- */
-function validateLineTax(item, qbItemId, qbSalesTaxCodeId, taxMappings) {
-  const hsTaxId = item.properties?.hs_tax_rate_group_id;
-
-  if (!hsTaxId) {
-    throw new Error(`Line item ${item.id} sin hs_tax_rate_group_id. El usuario debe seleccionar una tasa en HS.`);
-  }
-
-  const expectedHsTaxId = Object.keys(taxMappings).find(k => taxMappings[k] === qbSalesTaxCodeId);
-  if (!expectedHsTaxId) {
-    throw new Error(`QB item ${qbItemId} usa TaxCode ${qbSalesTaxCodeId} que no está en taxMappings del tenant. Ejecuta configure-tax-mappings.js para registrarlo.`);
-  }
-
-  if (hsTaxId !== expectedHsTaxId) {
-    const hsMappedTo = taxMappings[hsTaxId] || '(sin mapeo)';
-    throw new Error(
-      `Tax mismatch en line item ${item.id}: HS envía "${hsTaxId}" (→ QB ${hsMappedTo}), pero QB item ${qbItemId} tiene TaxCode ${qbSalesTaxCodeId} (← HS esperado "${expectedHsTaxId}").`
-    );
-  }
 }
 
 /**
@@ -179,31 +154,23 @@ async function syncInvoiceToQuickbooks(invoiceId, tenantId = DEFAULT_TENANT_ID) 
       );
     }
 
-    // 4. Cargar tenant (para utcOffset + taxMappings)
+    // 4. Cargar tenant (para utcOffset). taxMappings ya NO se usa: la validación de tax
+    // por línea fue eliminada y el tax lo determina el producto en QB.
     const tenant = await Tenant.findOne({ tenantId });
     if (!tenant) throw new Error(`Tenant ${tenantId} no encontrado.`);
 
-    const taxMappings = {};
-    const rawTaxMappings = tenant.preferences?.taxMappings;
-    if (rawTaxMappings instanceof Map) {
-      for (const [k, v] of rawTaxMappings.entries()) taxMappings[k] = v;
-    } else if (rawTaxMappings && typeof rawTaxMappings === 'object') {
-      Object.assign(taxMappings, rawTaxMappings);
-    }
-    if (Object.keys(taxMappings).length === 0) {
-      throw new Error(`Tenant ${tenantId} sin taxMappings configurados. Ejecuta configure-tax-mappings.js antes de sincronizar facturas.`);
-    }
-
     const utcOffsetMs = tenant?.hubspot?.utcOffsetMilliseconds || 0;
 
-    // 5. Resolución de PRODUCTOS + validación estricta de tax por línea
+    // 5. Resolución de PRODUCTOS (el tax de cada línea se hereda del producto en QB)
     logger.info(`📦 Procesando ${lineItemAssociations.length} Line Items...`);
     const lineItemsData = await hubspotClient.getLineItemsDetails(lineItemAssociations);
     const qbInvoiceLines = [];
 
     for (const item of lineItemsData) {
+      // El impuesto de cada línea lo determina el SalesTaxCodeRef del producto en QB
+      // (resuelto abajo). Ya NO se valida hs_tax_rate_group_id de HS: el cliente dejó de
+      // usar ese campo. Precondición operativa: todo producto en QB debe tener tax 0%.
       const { qbItemId, qbSalesTaxCodeId } = await resolveQbItemIdForLineItem(item, tenantId);
-      validateLineTax(item, qbItemId, qbSalesTaxCodeId, taxMappings);
       const mappedLine = qbMapper.mapLineItemToQb(item, qbItemId, qbSalesTaxCodeId);
       qbInvoiceLines.push(mappedLine);
     }
