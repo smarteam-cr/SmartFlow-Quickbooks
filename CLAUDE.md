@@ -28,9 +28,9 @@ src/
 │   └── models/
 │       ├── entity_mapping.model.js # hsId ↔ qbId relationships + payloadHash + syncToken
 │       ├── event_dedup.model.js    # 5-min TTL dedup window for webhook events
-│       ├── job.model.js            # SyncJob queue with status lifecycle + 30-day TTL on completed
+│       ├── job.model.js            # SyncJob queue with status lifecycle + 30-day TTL on closed jobs (completed/skipped/dead_letter)
 │       ├── oauth_state.model.js    # Anti-CSRF state for OAuth (10-min TTL)
-│       ├── sync_audit.model.js     # Audit trail of all sync operations
+│       ├── sync_audit.model.js     # Audit trail schema (DEFINED BUT UNUSED — see Architecture)
 │       └── tenant.model.js         # Multi-tenant config: credentials, preferences, mappings
 ├── integrations/
 │   ├── hubspot/
@@ -77,7 +77,7 @@ src/
     └── mutex.util.js                # Promise-based per-key sequential execution
 ```
 
-**Root-level files:** `Dockerfile`, `docker-compose.yml`, `.env.example`, `deposit-accounts.example.json`, `tax-mappings.example.json`, `ROADMAP_PRODUCTION.md`.
+**Root-level files:** `Dockerfile`, `docker-compose.yml`, `.env.example`, `deposit-accounts.example.json`, `tax-mappings.example.json`.
 
 **Config directory:** `config/deposit-accounts.json`, `config/tax-mappings.json` (active config files used by scripts).
 
@@ -98,7 +98,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 ### Key Architectural Decisions
 
-**Job Queue is MongoDB-backed** (`src/db/models/job.model.js`). Jobs persist across restarts. The worker (`src/tasks/worker.js`) uses `findOneAndUpdate` to atomically claim jobs. A MongoDB Change Stream wakes the worker on new inserts. Orphaned PROCESSING jobs are recovered to **PENDING** on startup.
+**Job Queue is MongoDB-backed** (`src/db/models/job.model.js`). Jobs persist across restarts. The worker (`src/tasks/worker.js`) fetches `PENDING` jobs (`find`) and marks each `PROCESSING` via `findByIdAndUpdate(_id)`. Note: this claim is **not** conditional on status (there is no `{ _id, status: PENDING }` guard), so it is only safe for a **single worker process** — the in-process `activeJobs` slot counter prevents over-subscription, but running multiple worker instances could double-claim a job. A MongoDB Change Stream wakes the worker on new inserts. Orphaned PROCESSING jobs are recovered to **PENDING** on startup.
 
 **Worker V2.0 (pull-based motor)**: processes up to `CONCURRENCY` jobs simultaneously. When a slot frees up, `processNextJobs()` recursively checks for more work. The retry poller runs every 30 seconds, promoting `RETRY_PENDING` jobs back to `PENDING` once their `nextRetryAt` has passed.
 
@@ -118,7 +118,7 @@ HubSpot/QB Webhook → webhook.routes.js → webhook.controller.js
 
 **Event deduplication** (`src/services/dedupe.service.js`): every incoming webhook event is hashed (sha256 of payload, first 16 chars) and stored in `event_dedup` collection (5-min TTL). Identical re-deliveries from HS/QB are dropped at the gate before a job is created.
 
-**Sync audit trail** (`src/db/models/sync_audit.model.js`): every sync operation records entity, action (created/updated/skipped/suppressed/failed), source/target, description, and duration. Indexed by `(tenantId, createdAt desc)`.
+**Sync audit trail** (`src/db/models/sync_audit.model.js`): a `SyncAudit` schema (entity, action created/updated/skipped/suppressed/failed, source/target, description, duration; indexed by `(tenantId, createdAt desc)`) **is defined but not currently wired** — no code imports or writes to it, so the collection stays empty. Sync activity today is traced only through the Winston logs and the `status`/`lastError` fields on `syncjobs`. Implementing or removing this model is a pending item.
 
 **Timezone-aware dates** (`src/utils/date.util.js`): HubSpot sends UTC timestamps representing "end of day" in the client's timezone. `formatToQbDate` applies the tenant's `utcOffsetMilliseconds` before formatting to `YYYY-MM-DD`, preventing off-by-one date errors.
 
@@ -236,7 +236,7 @@ When adding a new business rule that should abort sync without consuming retries
 - `objectTypeId === '0-53'` → INVOICE (also has `hs_balance_due` shield: only dispatches when balance ≤ 0; blocks bare `object.creation`)
 - `objectTypeId === '0-101'` → HS_PAYMENT
 
-**QuickBooks routing**: `Customer`, `Item`, and `Invoice` entities are processed. `Customer` is mapped to CONTACT or COMPANY (internal entity). `Item` maps to PRODUCT. `Invoice` events are only acted on when `operation='Emailed'`.
+**QuickBooks routing**: `Customer`, `Item`, and `Invoice` entities are processed. In `QB_ENTITY_MAP`, `Customer` maps to **CONTACT** and `Item` to PRODUCT; the CONTACT-vs-COMPANY disambiguation happens **downstream** in `contactSyncService.syncCustomerFromQuickbooks`, which inspects `isPerson`/sub-customer and delegates to `companySyncService.syncCompanyFromQuickbooks` when the QB customer is actually a company. `Invoice` events are only acted on when `operation='Emailed'`.
 
 ### Auth & OAuth Endpoints
 
@@ -256,7 +256,7 @@ Applied globally via `app.js`:
 1. **Raw body preservation** — Custom JSON parser stores raw body for HMAC signature validation.
 2. **Correlation ID** (`correlation.middleware.js`) — Propagates `x-correlation-id` header or generates UUID v4. Returned in response headers.
 3. **Helmet** — Security headers (CSP disabled).
-4. **CORS** — Configurable via `ALLOWED_ORIGINS`.
+4. **CORS** — Currently `cors({ origin: true })` (reflects any origin). The `ALLOWED_ORIGINS` env var is parsed in config but **not wired** to CORS yet.
 5. **Compression** — gzip/deflate response compression.
 6. **Rate limiting** — 100 requests per minute per IP.
 7. **API key validation** (`api-key.middleware.js`) — Applied to `/auth/quickbooks/connect`, `/status`, `/disconnect`. Uses `crypto.timingSafeEqual` to prevent timing attacks.
