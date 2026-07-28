@@ -3,6 +3,7 @@ const hubspotClient = require('../integrations/hubspot/hubspot.client');
 const quickbooksClient = require('../integrations/quickbooks/quickbooks.client');
 const mappingService = require('./mapping.service');
 const echoSuppression = require('../utils/echo.suppression.util');
+const { capitalizeTitleCase } = require('../utils/text.util');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID } = require('../config/constants');
 const { MissingNitError } = require('../utils/errors.util');
@@ -10,7 +11,7 @@ const { MissingNitError } = require('../utils/errors.util');
 function normalizeHsCompanyToQb(company) {
     const props = company.properties || {};
     const nit = props.nit || "";
-    const companyName = props.name || "";
+    const companyName = capitalizeTitleCase(props.name);
     const displayName = nit
         ? `${companyName} ${nit}`.trim()
         : companyName || props.domain || `Company-${company.id}`;
@@ -25,7 +26,7 @@ function normalizeHsCompanyToQb(company) {
 
 function normalizeQbCompanyToHs(qbCustomer) {
     return {
-        name: qbCustomer.CompanyName || qbCustomer.DisplayName || "",
+        name: capitalizeTitleCase(qbCustomer.CompanyName || qbCustomer.DisplayName),
         nit: qbCustomer.AlternatePhone?.FreeFormNumber || "", phone: qbCustomer.PrimaryPhone?.FreeFormNumber || "",
         domain: (qbCustomer.WebAddr?.URI || "").replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
         address: qbCustomer.BillAddr?.Line1 || "", city: qbCustomer.BillAddr?.City || "",

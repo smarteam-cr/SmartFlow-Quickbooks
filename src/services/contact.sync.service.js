@@ -4,6 +4,7 @@ const quickbooksClient = require('../integrations/quickbooks/quickbooks.client')
 const mappingService = require('./mapping.service');
 const companySyncService = require('./company.sync.service');
 const echoSuppression = require('../utils/echo.suppression.util');
+const { capitalizeTitleCase } = require('../utils/text.util');
 const logger = require('../lib/logger.lib');
 const { DEFAULT_TENANT_ID, CONTACT_STATUS_PROPERTY, CONTACT_STATUS_VALUES } = require('../config/constants');
 const { InactiveParentError, MissingIdentityError } = require('../utils/errors.util');
@@ -29,13 +30,15 @@ function qbActiveToStatus(active) {
 function normalizeHsContactToQb(hsContact, qbParentId) {
   const props = hsContact.properties || {};
   const suffix = (props.documento_de_identidad || "").substring(0, 16);
-  let displayName = `${props.firstname || ""} ${props.lastname || ""}`.trim();
+  const firstName = capitalizeTitleCase(props.firstname);
+  const lastName = capitalizeTitleCase(props.lastname);
+  let displayName = `${firstName} ${lastName}`.trim();
   if (suffix) displayName = displayName ? `${displayName} ${suffix}` : suffix;
 
   const status = normalizeHsStatus(props[CONTACT_STATUS_PROPERTY]);
 
   return {
-    email: props.email || "", firstName: props.firstname || "", lastName: props.lastname || "",
+    email: props.email || "", firstName, lastName,
     suffix, phone: props.phone || "", mobile: props.hs_whatsapp_phone_number || "",
     address: props.address || "", city: props.city || "",
     state: props.state || "", zip: props.zip || "",
@@ -295,7 +298,7 @@ async function syncCustomerFromQuickbooks(qbCustomerId, tenantId = DEFAULT_TENAN
   if (isSubCustomer || isPerson) {
     // --- FLUJO DE CONTACTO ---
     const hsProps = {
-      firstname: qbCustomer.GivenName || "", lastname: qbCustomer.FamilyName || "",
+      firstname: capitalizeTitleCase(qbCustomer.GivenName), lastname: capitalizeTitleCase(qbCustomer.FamilyName),
       email: qbCustomer.PrimaryEmailAddr?.Address || "", phone: qbCustomer.PrimaryPhone?.FreeFormNumber || "",
       hs_whatsapp_phone_number: qbCustomer.Mobile?.FreeFormNumber || "", address: qbCustomer.BillAddr?.Line1 || "",
       city: qbCustomer.BillAddr?.City || "", state: qbCustomer.BillAddr?.CountrySubDivisionCode || "",
